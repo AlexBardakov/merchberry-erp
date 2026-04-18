@@ -1,0 +1,45 @@
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { ProtectedRoute } from './components/ProtectedRoute';
+import { Layout } from './components/Layout';
+import { Login } from './pages/Login';
+import { Dashboard } from './pages/Dashboard';
+import { Inventory } from './pages/Inventory';
+
+// Красивые заглушки для будущих страниц
+const Placeholder = ({ title }: { title: string }) => (
+  <div className="flex items-center justify-center h-64 bg-white rounded-2xl shadow-sm border border-gray-100 text-gray-500 font-medium">
+    {title} (В разработке...)
+  </div>
+);
+
+function App() {
+  return (
+    <BrowserRouter>
+      <Routes>
+        {/* Открытый маршрут для авторизации */}
+        <Route path="/login" element={<Login />} />
+
+        {/* Защищенные маршруты (нужен токен) */}
+        <Route element={<ProtectedRoute />}>
+          {/* Оболочка с боковым меню */}
+          <Route element={<Layout />}>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/inventory" element={<Inventory />} />
+            <Route path="/finance" element={<Placeholder title="Финансовая сводка" />} />
+            
+            {/* Строго защищенные маршруты (Только для admin) */}
+            <Route element={<ProtectedRoute allowedRole="admin" />}>
+              <Route path="/users" element={<Placeholder title="Управление продавцами" />} />
+              <Route path="/sync" element={<Placeholder title="Синхронизация с Бизнес.Ру" />} />
+            </Route>
+          </Route>
+        </Route>
+
+        {/* Перехват неизвестных ссылок -> кидаем на главную */}
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </BrowserRouter>
+  );
+}
+
+export default App;
