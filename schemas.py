@@ -63,3 +63,13 @@ class ProductRead(BaseModel):
     stock: int
     seller_id: Optional[int] = None
     is_obsolete: bool
+
+class UserUpdate(BaseModel):
+    full_name: Optional[str] = None
+    phone: Optional[str] = None
+    commission_percent: Optional[float] = None
+    notes: Optional[str] = None
+    is_active: Optional[bool] = None
+
+class PasswordUpdate(BaseModel):
+    new_password: str

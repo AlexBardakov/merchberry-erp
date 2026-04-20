@@ -2,6 +2,7 @@ from typing import Optional, List
 from datetime import datetime, timezone
 from sqlmodel import Field, SQLModel, Relationship
 
+
 # --- ТАБЛИЦА: ПОЛЬЗОВАТЕЛИ (Арендаторы и Админ) ---
 class User(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -25,6 +26,10 @@ class User(SQLModel, table=True):
     
     # Текущий расчетный баланс продавца
     balance: float = Field(default=0.0)
+
+    notes: Optional[str] = None  # Комментарий админа
+    is_active: bool = Field(default=True)  # Статус аккаунта (вместо удаления)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     # Связи с другими таблицами
     products: List["Product"] = Relationship(back_populates="seller")

@@ -6,7 +6,7 @@ import { LayoutDashboard, Package, Wallet, Users, RefreshCw, LogOut } from 'luci
 export const Layout = () => {
   const location = useLocation(); // Чтобы знать, на какой мы странице
   const navigate = useNavigate();
-  
+
   const userRole = localStorage.getItem('userRole');
   const username = localStorage.getItem('username') || 'Пользователь';
 
@@ -37,7 +37,7 @@ export const Layout = () => {
         <div className="h-16 flex items-center px-6 border-b border-gray-200">
           <span className="text-xl font-bold text-indigo-600 tracking-wide">Merchberry</span>
         </div>
-        
+
         <nav className="flex-1 px-4 py-6 space-y-1 overflow-y-auto">
           {menuItems.map((item) => {
             const isActive = location.pathname === item.path;
@@ -46,8 +46,8 @@ export const Layout = () => {
                 key={item.path}
                 to={item.path}
                 className={`flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors ${
-                  isActive 
-                    ? 'bg-indigo-50 text-indigo-700 font-medium' 
+                  isActive
+                    ? 'bg-indigo-50 text-indigo-700 font-medium'
                     : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
                 }`}
               >
@@ -77,7 +77,7 @@ export const Layout = () => {
           <h1 className="text-xl font-semibold text-gray-800">
             {menuItems.find(i => i.path === location.pathname)?.name || 'Merchberry ERP'}
           </h1>
-          
+
           <div className="flex items-center gap-4">
             <div className="text-right">
               <p className="text-sm font-medium text-gray-900">{username}</p>
@@ -95,7 +95,7 @@ export const Layout = () => {
         {/* КОНТЕНТ СТРАНИЦЫ */}
         <div className="flex-1 overflow-auto p-8">
           {/* Сюда будут подгружаться Dashboard, Inventory и т.д. */}
-          <Outlet /> 
+          <Outlet />
         </div>
       </main>
     </div>
