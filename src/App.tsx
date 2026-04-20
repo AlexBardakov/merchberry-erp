@@ -6,6 +6,7 @@ import { Dashboard } from './pages/Dashboard';
 import { Inventory } from './pages/Inventory';
 import { Users } from './pages/Users';
 import { Finance } from './pages/Finance';
+import { Sync } from './pages/Sync';
 
 // Красивые заглушки для будущих страниц
 const Placeholder = ({ title }: { title: string }) => (
@@ -32,7 +33,7 @@ function App() {
             {/* Строго защищенные маршруты (Только для admin) */}
             <Route element={<ProtectedRoute allowedRole="admin" />}>
               <Route path="/users" element={<Users />} />
-              <Route path="/sync" element={<Placeholder title="Синхронизация с Бизнес.Ру" />} />
+              <Route path="/sync" element={<Sync />} />
             </Route>
           </Route>
         </Route>

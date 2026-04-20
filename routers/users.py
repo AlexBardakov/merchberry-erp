@@ -4,7 +4,7 @@ from typing import List, Optional
 
 from database import get_session
 from models import User
-from auth import get_password_hash, get_current_admin
+from auth import get_password_hash, get_current_admin, get_current_user
 from schemas import UserCreate, UserUpdate, PasswordUpdate
 
 router = APIRouter(prefix="/api/users", tags=["Users"])
