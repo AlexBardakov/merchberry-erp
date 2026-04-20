@@ -1,5 +1,5 @@
 from sqlmodel import Session, select
-from main import engine, create_db_and_tables
+from database import engine, create_db_and_tables # Исправленный импорт
 from models import User
 from auth import get_password_hash
 
@@ -12,8 +12,8 @@ with Session(engine) as session:
     if not existing_user:
         # Создаем первого админа
         admin = User(
-            username="admin", 
-            role="admin", 
+            username="admin",
+            role="admin",
             hashed_password=get_password_hash("admin123"), # Пароль будет admin123
             full_name="Главный Администратор"
         )

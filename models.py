@@ -35,10 +35,10 @@ class User(SQLModel, table=True):
 class Product(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     
-    # Артикул Бизнес.Ру. Сделан Optional, так как вы упомянули, что он может отсутствовать
+    # Артикул Бизнес.Ру.
     sku: Optional[str] = Field(default=None, unique=True, index=True) 
     
-    # 3. НАИМЕНОВАНИЕ ТЕПЕРЬ УНИКАЛЬНО (Второй способ идентификации)
+    # НАИМЕНОВАНИЕ  УНИКАЛЬНО
     name: str = Field(unique=True, index=True) 
     
     base_price: float                              # Справочная цена
@@ -46,6 +46,7 @@ class Product(SQLModel, table=True):
     
     # Связь: чей это товар (ID пользователя)
     seller_id: Optional[int] = Field(default=None, foreign_key="user.id")
+    is_obsolete: bool = Field(default=False)
     seller: Optional[User] = Relationship(back_populates="products")
 
 

@@ -4,6 +4,8 @@ import { Layout } from './components/Layout';
 import { Login } from './pages/Login';
 import { Dashboard } from './pages/Dashboard';
 import { Inventory } from './pages/Inventory';
+import { Users } from './pages/Users';
+import { Finance } from './pages/Finance';
 
 // Красивые заглушки для будущих страниц
 const Placeholder = ({ title }: { title: string }) => (
@@ -25,11 +27,11 @@ function App() {
           <Route element={<Layout />}>
             <Route path="/" element={<Dashboard />} />
             <Route path="/inventory" element={<Inventory />} />
-            <Route path="/finance" element={<Placeholder title="Финансовая сводка" />} />
+            <Route path="/finance" element={<Finance />} />
             
             {/* Строго защищенные маршруты (Только для admin) */}
             <Route element={<ProtectedRoute allowedRole="admin" />}>
-              <Route path="/users" element={<Placeholder title="Управление продавцами" />} />
+              <Route path="/users" element={<Users />} />
               <Route path="/sync" element={<Placeholder title="Синхронизация с Бизнес.Ру" />} />
             </Route>
           </Route>
