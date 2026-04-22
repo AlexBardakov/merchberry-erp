@@ -180,15 +180,9 @@ def create_manual_transaction(
     return new_transaction
 
 
-@router.post("/sync/sales")
-def sync_sales_from_b2b(
-        admin_data: dict = Depends(get_current_admin),
-        session: Session = Depends(get_session)
-):
+def run_b2b_sync(session: Session, days_back: int = 3):
     client = BusinessRuClient()
-
-    # Ищем продажи за последние 3 дня
-    date_from = datetime.now(timezone.utc) - timedelta(days=3)
+    date_from = datetime.now(timezone.utc) - timedelta(days=days_back)
     sales_data = client.get_recent_sales(date_from)
 
     processed_count = 0
@@ -224,40 +218,52 @@ def sync_sales_from_b2b(
             if not product and name and name.lower() != "none":
                 product = session.exec(select(Product).where(Product.name == name)).first()
 
-            # Если товар найден в базе и у него есть автор
-            if product and product.seller_id:
-                # ЗАЩИТА: Строгая блокировка строки пользователя при начислении комиссии
-                seller = session.exec(
-                    select(User).where(User.id == product.seller_id).with_for_update()
-                ).first()
+            # 3. ЕСЛИ ТОВАР НАЙДЕН — СПИСЫВАЕМ ОСТАТКИ И НАЧИСЛЯЕМ АВТОРУ ДЕНЬГИ
+            if product:
+                # СПИСАНИЕ ОСТАТКА (Фикс проблемы из документации)
+                old_stock = product.stock
+                product.stock = max(0, product.stock - count)
+                session.add(product)
 
-                if seller and seller.is_active:
-                    # Высчитываем комиссии
-                    total_item_price = price * count
-                    commission_amount = total_item_price * (seller.commission_percent / 100.0)
-                    seller_profit = total_item_price - commission_amount
+                create_audit_log(
+                    session=session,
+                    actor="system_sync",
+                    entity_name="Product",
+                    entity_id=product.id,
+                    action="sync_stock_deduction",
+                    changes={
+                        "stock": {"old": old_stock, "new": product.stock},
+                        "comment": f"Списание по чеку #{check_id}"
+                    }
+                )
 
-                    # Создаем запись о продаже
-                    new_tx = Transaction(
-                        type="sale",
-                        amount=seller_profit,
-                        commission_amount=commission_amount,
-                        seller_id=seller.id,
-                        product_identifier=product.name,
-                        comment=f"Чек #{check_id} (Бизнес.Ру)"
-                    )
+                # НАЧИСЛЕНИЕ АВТОРУ
+                if product.seller_id:
+                    seller = session.exec(
+                        select(User).where(User.id == product.seller_id).with_for_update()
+                    ).first()
 
-                    # Пополняем баланс автора
-                    seller.balance += seller_profit
+                    if seller and seller.is_active:
+                        total_item_price = price * count
+                        commission_amount = total_item_price * (seller.commission_percent / 100.0)
+                        seller_profit = total_item_price - commission_amount
 
-                    session.add(new_tx)
-                    session.add(seller)
+                        new_tx = Transaction(
+                            type="sale",
+                            amount=seller_profit,
+                            commission_amount=commission_amount,
+                            seller_id=seller.id,
+                            product_identifier=product.name,
+                            comment=f"Чек #{check_id} (Бизнес.Ру)"
+                        )
 
-                    # Логировать автоматическое пополнение от продаж в AuditLog не нужно,
-                    # так как эта информация и так есть в таблице Transactions. Это спасет от спама.
+                        seller.balance += seller_profit
 
-                    processed_count += 1
-                    total_revenue += total_item_price
+                        session.add(new_tx)
+                        session.add(seller)
+
+                        processed_count += 1
+                        total_revenue += total_item_price
 
     session.commit()
     return {
@@ -266,3 +272,14 @@ def sync_sales_from_b2b(
         "skipped_checks": skipped_count,
         "total_revenue": total_revenue
     }
+
+# --- Обновленный эндпоинт ручной синхронизации (для кнопки на фронте) ---
+@router.post("/sync/sales")
+def trigger_manual_sync(
+        days: int = Query(3, description="За сколько дней проверить чеки"),
+        admin_data: dict = Depends(get_current_admin),
+        session: Session = Depends(get_session)
+):
+    # Просто вызываем наше ядро синхронизации
+    result = run_b2b_sync(session=session, days_back=days)
+    return result
