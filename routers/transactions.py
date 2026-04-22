@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import Session, select, col
 from typing import List, Optional
+from pydantic import BaseModel
 
 from services.business_api import BusinessRuClient
 from database import get_session
@@ -136,7 +137,11 @@ def create_manual_transaction(
         admin_data: dict = Depends(get_current_admin),
         session: Session = Depends(get_session)
 ):
-    seller = session.get(User, req.seller_id)
+    # ЗАЩИТА: Блокируем продавца от параллельных изменений
+    seller = session.exec(
+        select(User).where(User.id == req.seller_id).with_for_update()
+    ).first()
+
     if not seller:
         raise HTTPException(status_code=404, detail="Продавец не найден")
 
@@ -147,17 +152,33 @@ def create_manual_transaction(
         seller_id=seller.id
     )
 
+    old_balance = seller.balance
     seller.balance += req.amount
 
     session.add(new_transaction)
     session.add(seller)
+    session.flush()  # Получаем ID транзакции до коммита
+
+    # Пишем в лог
+    create_audit_log(
+        session=session,
+        actor=admin_data.get("username", "admin"),
+        entity_name="User",
+        entity_id=seller.id,
+        action="manual_transaction_created",
+        changes={
+            "balance": {"old": old_balance, "new": seller.balance},
+            "transaction_id": new_transaction.id,
+            "type": req.type,
+            "amount": req.amount
+        }
+    )
+
     session.commit()
     session.refresh(new_transaction)
 
     return new_transaction
 
-
-# В конец файла routers/transactions.py
 
 @router.post("/sync/sales")
 def sync_sales_from_b2b(
@@ -205,7 +226,10 @@ def sync_sales_from_b2b(
 
             # Если товар найден в базе и у него есть автор
             if product and product.seller_id:
-                seller = session.get(User, product.seller_id)
+                # ЗАЩИТА: Строгая блокировка строки пользователя при начислении комиссии
+                seller = session.exec(
+                    select(User).where(User.id == product.seller_id).with_for_update()
+                ).first()
 
                 if seller and seller.is_active:
                     # Высчитываем комиссии
@@ -228,6 +252,9 @@ def sync_sales_from_b2b(
 
                     session.add(new_tx)
                     session.add(seller)
+
+                    # Логировать автоматическое пополнение от продаж в AuditLog не нужно,
+                    # так как эта информация и так есть в таблице Transactions. Это спасет от спама.
 
                     processed_count += 1
                     total_revenue += total_item_price
