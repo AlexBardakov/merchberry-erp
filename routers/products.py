@@ -91,20 +91,49 @@ def create_product(
 def update_product(
         product_id: int,
         update_data: ProductUpdateRequest,
-        admin_data: dict = Depends(get_current_admin),
+        admin_data: dict = Depends(get_current_admin),  # Как в твоем коде, меняет только админ
         session: Session = Depends(get_session)
 ):
     db_product = session.get(Product, product_id)
     if not db_product:
         raise HTTPException(status_code=404, detail="Товар не найден")
 
+    # Получаем только те поля, которые реально пришли в запросе
     update_dict = update_data.dict(exclude_unset=True)
-    for key, value in update_dict.items():
-        setattr(db_product, key, value)
+
+    changes = {}
+
+    # Динамически проверяем изменения и применяем их
+    for key, new_value in update_dict.items():
+        old_value = getattr(db_product, key, None)
+
+        # Если значение действительно поменялось, записываем в лог и в объект
+        if old_value != new_value:
+            changes[key] = {"old": old_value, "new": new_value}
+            setattr(db_product, key, new_value)
+
+    # Если по факту ничего не изменилось (прислали те же самые цифры), базу не трогаем
+    if not changes:
+        return db_product
 
     session.add(db_product)
+
+    # Берем логин админа (предполагается, что в JWT он лежит под ключом username)
+    admin_username = admin_data.get("username", "admin")
+
+    # Создаем ОДНУ запись в логах со всеми измененными полями
+    create_audit_log(
+        session=session,
+        actor=admin_username,
+        entity_name="Product",
+        entity_id=db_product.id,
+        action="product_update",
+        changes=changes
+    )
+
     session.commit()
     session.refresh(db_product)
+
     return db_product
 
 

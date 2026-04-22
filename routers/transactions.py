@@ -8,9 +8,74 @@ from database import get_session
 from models import Transaction, User, Product
 from auth import get_current_user, get_current_admin
 from schemas import TransactionCreateRequest, TransactionRead
+from utils import create_audit_log
 
 router = APIRouter(prefix="/api/transactions", tags=["Transactions"])
 
+class BalanceCorrectionRequest(BaseModel):
+    seller_id: int
+    amount: float
+    comment: str
+
+
+@router.post("/correction")
+def apply_balance_correction(
+        req: BalanceCorrectionRequest,
+        current_user: dict = Depends(get_current_user),
+        session: Session = Depends(get_session)
+):
+    # Доступ только для администратора
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Доступ запрещен")
+
+    # 1. ЗАЩИТА ГОНКИ: Блокируем строку пользователя в БД
+    # Пока эта транзакция не завершится (commit), никто другой не сможет изменить этого юзера
+    user = session.exec(
+        select(User).where(User.id == req.seller_id).with_for_update()
+    ).first()
+
+    if not user:
+        raise HTTPException(status_code=404, detail="Продавец не найден")
+
+    old_balance = user.balance
+    new_balance = old_balance + req.amount
+
+    # 2. Применяем изменения
+    user.balance = new_balance
+    session.add(user)
+
+    # 3. Создаем запись о финансовой операции
+    transaction = Transaction(
+        type="correction",
+        amount=req.amount,
+        comment=req.comment,
+        seller_id=user.id
+    )
+    session.add(transaction)
+
+    # Делаем flush, чтобы БД присвоила ID транзакции (он нам нужен для лога)
+    # При этом commit еще не происходит, данные в БД еще не зафиксированы окончательно
+    session.flush()
+
+    # 4. Записываем понятный лог (одна строка с JSON)
+    create_audit_log(
+        session=session,
+        actor=current_user.get("username"),
+        entity_name="User",
+        entity_id=user.id,
+        action="manual_balance_correction",
+        changes={
+            "balance": {"old": old_balance, "new": new_balance},
+            "transaction_id": transaction.id,
+            "comment": req.comment
+        }
+    )
+
+    # 5. Сохраняем всё вместе. Транзакция закрывается, блокировка строки снимается!
+    session.commit()
+    session.refresh(user)
+
+    return {"status": "success", "new_balance": user.balance}
 
 @router.get("/", response_model=List[TransactionRead])
 def get_transactions(

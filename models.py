@@ -1,37 +1,36 @@
-from typing import Optional, List
+# Файл: models.py
+from typing import Optional, List, Dict
 from datetime import datetime, timezone
-from sqlmodel import Field, SQLModel, Relationship
+from sqlmodel import Field, SQLModel, Relationship, Column, JSON
 
 
 # --- ТАБЛИЦА: ПОЛЬЗОВАТЕЛИ (Арендаторы и Админ) ---
 class User(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
-    username: str = Field(unique=True, index=True) # Логин
-    role: str = Field(default="seller")            # "admin" или "seller"
+    username: str = Field(unique=True, index=True)
+    role: str = Field(default="seller")
     hashed_password: str
-    
-    # 1. ИДЕНТИФИКАЦИЯ И КОНТАКТЫ
-    full_name: Optional[str] = Field(default=None)       # Имя/ФИО
-    phone: Optional[str] = Field(default=None)           # Актуальный номер
-    payment_details: Optional[str] = Field(default=None) # Реквизиты для выплат
-    
-    # Отслеживание изменений профиля
-    profile_last_modified: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    profile_modified_by: str = Field(default="admin")    # Кто менял последним: "admin" или "seller"
 
-    # 2. ФИНАНСОВЫЕ УСЛОВИЯ (Меняет только Админ)
-    shelf_location: Optional[str] = Field(default=None)  # Расположение/номера полок (например: "A12, B04")
-    rent_rate: float = Field(default=0.0)                # Стоимость аренды за эти полки
-    commission_percent: float = Field(default=15.0)      # Процент комиссии магазина
-    
-    # Текущий расчетный баланс продавца
+    full_name: Optional[str] = Field(default=None)
+    phone: Optional[str] = Field(default=None)
+    payment_details: Optional[str] = Field(default=None)
+
+    profile_last_modified: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    profile_modified_by: str = Field(default="admin")
+
+    shelf_location: Optional[str] = Field(default=None)
+    rent_rate: float = Field(default=0.0)
+    commission_percent: float = Field(default=15.0)
     balance: float = Field(default=0.0)
 
-    notes: Optional[str] = None  # Комментарий админа
-    is_active: bool = Field(default=True)  # Статус аккаунта (вместо удаления)
+    # --- НОВОЕ: Настройки уведомлений (Шаг 3) ---
+    notifications_enabled: bool = Field(default=True)
+    low_stock_threshold: int = Field(default=3)  # При каком остатке бить тревогу
+
+    notes: Optional[str] = None
+    is_active: bool = Field(default=True)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
-    # Связи с другими таблицами
     products: List["Product"] = Relationship(back_populates="seller")
     transactions: List["Transaction"] = Relationship(back_populates="seller")
 
@@ -39,39 +38,46 @@ class User(SQLModel, table=True):
 # --- ТАБЛИЦА: ТОВАРЫ ---
 class Product(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
-    
-    # Артикул Бизнес.Ру.
-    sku: Optional[str] = Field(default=None, unique=True, index=True) 
-    
-    # НАИМЕНОВАНИЕ  УНИКАЛЬНО
-    name: str = Field(unique=True, index=True) 
-    
-    base_price: float                              # Справочная цена
-    stock: int = Field(default=0)                  # Актуальный остаток на полке
-    
-    # Связь: чей это товар (ID пользователя)
+    sku: Optional[str] = Field(default=None, unique=True, index=True)
+    name: str = Field(unique=True, index=True)
+    base_price: float
+    stock: int = Field(default=0)
+
     seller_id: Optional[int] = Field(default=None, foreign_key="user.id")
     is_obsolete: bool = Field(default=False)
     seller: Optional[User] = Relationship(back_populates="products")
 
 
-# --- ТАБЛИЦА: ТРАНЗАКЦИИ (Продажи, возвраты, аренды, выплаты) ---
+# --- ТАБЛИЦА: ТРАНЗАКЦИИ ---
 class Transaction(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
-    
-    # Типы операций: "sale" (продажа), "return" (возврат покупателем), 
-    # "rent" (списание аренды), "payout" (выплата), "correction" (ручная корректировка)
-    type: str 
-    
-    amount: float                                  # Сумма операции
-    commission_amount: float = Field(default=0.0)  # Сумма удержанной комиссии (если это продажа)
-    
+    type: str
+    amount: float
+    commission_amount: float = Field(default=0.0)
+
     date: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    comment: Optional[str] = Field(default=None)   # Свободный комментарий или период
-    
-    # Чья это транзакция
+    comment: Optional[str] = Field(default=None)
+
     seller_id: int = Field(foreign_key="user.id")
     seller: Optional[User] = Relationship(back_populates="transactions")
-    
-    # Если это продажа конкретного товара (привязка по SKU или Наименованию)
     product_identifier: Optional[str] = Field(default=None)
+
+
+# --- НОВОЕ: ТАБЛИЦА ЛОГОВ (Шаг 2) ---
+class AuditLog(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    # Кто инициировал: логин админа/продавца или "system" (при синхронизации)
+    actor: str = Field(index=True)
+
+    # Сущность: "Product", "User", "Transaction"
+    entity_name: str
+    entity_id: Optional[int] = Field(default=None)
+
+    # Действие: "sync_update", "manual_edit", "status_change"
+    action: str
+
+    # Храним изменения в JSON, чтобы объединять цену и остаток в одной записи
+    # Пример: {"stock": {"old": 5, "new": 10}, "base_price": {"old": 1000, "new": 1200}}
+    changes: dict = Field(default_factory=dict, sa_column=Column(JSON))
