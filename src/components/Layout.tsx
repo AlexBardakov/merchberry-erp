@@ -207,11 +207,29 @@ export const Layout = () => {
                 <div className="py-10 text-center text-gray-400">Загрузка данных...</div>
               ) : profileData && (
                 <>
-                  <div className="space-y-6">
-                    {/* реквизиты и баланс */}
-                    <div className="flex justify-between items-center p-4 bg-green-50 rounded-2xl border border-green-100">
-                      <span className="text-sm font-medium text-green-700">Баланс к выплате:</span>
-                      <span className="text-xl font-bold text-green-600">{profileData.balance.toLocaleString('ru-RU')} ₽</span>
+                  <div className="space-y-4">
+                    <div className="bg-gray-50 rounded-xl p-4 space-y-3">
+                      <div className="flex justify-between text-sm border-b border-gray-200 pb-2">
+                        <span className="text-gray-500">ФИО / Реквизиты:</span>
+                        <span className="font-medium text-gray-900 text-right">{profileData.full_name || 'Не указано'}</span>
+                      </div>
+                      <div className="flex justify-between text-sm border-b border-gray-200 pb-2">
+                        <span className="text-gray-500">Телефон:</span>
+                        <span className="font-medium text-gray-900">{profileData.phone || 'Не указано'}</span>
+                      </div>
+                      <div className="flex justify-between text-sm border-b border-gray-200 pb-2">
+                        <span className="text-gray-500">Комиссия точки:</span>
+                        <span className="font-bold text-indigo-600">{profileData.commission_percent}%</span>
+                      </div>
+                      <div className="flex justify-between text-sm pt-1">
+                        <span className="text-gray-500">Текущий баланс:</span>
+                        <span className="font-bold text-green-600 text-base">{profileData.balance.toLocaleString('ru-RU')} ₽</span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-start gap-2 text-xs text-gray-500 bg-blue-50/50 p-3 rounded-lg border border-blue-100">
+                      <Info size={16} className="text-blue-500 shrink-0 mt-0.5" />
+                      <p>Если в ваших данных есть ошибка или изменились реквизиты, пожалуйста, сообщите об этом Администратору для обновления профиля.</p>
                     </div>
                   </div>
 
