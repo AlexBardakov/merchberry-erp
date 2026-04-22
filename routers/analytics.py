@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, Query
 from sqlmodel import Session, select
-from datetime import date, timedelta, datetime
+from datetime import date, timedelta, datetime, time, timezone
 from typing import List, Optional
 
 from database import get_session
@@ -25,10 +25,15 @@ def get_chart_data(
             User.username == current_user.get("username"))).first()
         target_seller_id = user_in_db.id
 
+    # ИСПРАВЛЕНИЕ: Превращаем даты с фронтенда в aware datetime (UTC),
+    # чтобы корректно сравнивать их с Transaction.date из базы данных
+    start_dt = datetime.combine(start_date, time.min).replace(tzinfo=timezone.utc)
+    end_dt = datetime.combine(end_date, time.max).replace(tzinfo=timezone.utc)
+
     query = select(Transaction).where(
         Transaction.type == "sale",
-        Transaction.date >= datetime.combine(start_date, datetime.min.time()),
-        Transaction.date <= datetime.combine(end_date, datetime.max.time())
+        Transaction.date >= start_dt,
+        Transaction.date <= end_dt
     )
 
     if target_seller_id:
@@ -62,7 +67,10 @@ def get_chart_data(
         current_start = current_end + timedelta(days=1)
 
     for txn in transactions:
+        # ИСПРАВЛЕНИЕ: Берем локальную дату транзакции для правильного распределения по корзинам
+        # Если твой сервер работает в другом часовом поясе, здесь можно добавить смещение
         txn_date = txn.date.date()
+
         for b in buckets:
             if b["start"] <= txn_date <= b["end"]:
                 b["total_amount"] += txn.amount
@@ -70,6 +78,11 @@ def get_chart_data(
                     prod_str = f"{txn.product_identifier} - {txn.amount} руб."
                     b["products"].append(prod_str)
                 break
+
+    # ИСПРАВЛЕНИЕ 3: Сортируем продукты внутри дня по убыванию цены (самые дорогие сверху тултипа)
+    for b in buckets:
+        # Извлекаем сумму из строки вида "Название - 1200.0 руб." для сортировки
+        b["products"].sort(key=lambda x: float(x.split(' - ')[1].replace(' руб.', '')), reverse=True)
 
     return [ChartDataPoint(label=b["label"], total_amount=b["total_amount"],
                            products=b["products"]) for b in buckets]

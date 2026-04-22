@@ -1,11 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import Session, select, or_
 from typing import List, Optional
+from datetime import date, timedelta, datetime, time, timezone
 
 from database import get_session
 from models import User
 from auth import get_password_hash, get_current_admin, get_current_user
-from schemas import UserCreate, UserUpdate, PasswordUpdate
+from schemas import UserCreate, UserUpdate, PasswordUpdate, UserUpdateSettings
 
 router = APIRouter(prefix="/api/users", tags=["Users"])
 
@@ -131,3 +132,26 @@ def delete_user(
     session.delete(user)
     session.commit()
     return {"message": "Пользователь успешно удален"}
+
+
+@router.patch("/me/settings")
+def update_my_settings(
+        settings: UserUpdateSettings,
+        current_user: dict = Depends(get_current_user),
+        session: Session = Depends(get_session)
+):
+    user = session.exec(select(User).where(User.username == current_user.get("username"))).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+
+    if settings.notifications_enabled is not None:
+        user.notifications_enabled = settings.notifications_enabled
+    if settings.low_stock_threshold is not None:
+        user.low_stock_threshold = settings.low_stock_threshold
+
+    session.add(user)
+    session.commit()
+    return {"status": "success", "settings": {
+        "notifications_enabled": user.notifications_enabled,
+        "low_stock_threshold": user.low_stock_threshold
+    }}

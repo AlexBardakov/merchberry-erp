@@ -73,3 +73,11 @@ class UserUpdate(BaseModel):
 
 class PasswordUpdate(BaseModel):
     new_password: str
+
+class UserUpdateSettings(BaseModel):
+    notifications_enabled: Optional[bool] = None
+    low_stock_threshold: Optional[int] = None
+
+class UserUpdateSettings(BaseModel):
+    notifications_enabled: Optional[bool] = None
+    low_stock_threshold: Optional[int] = None

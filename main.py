@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 # from apscheduler.schedulers.background import BackgroundScheduler
 
 from database import create_db_and_tables
-from routers import auth_router, users, products, transactions, analytics
+from routers import auth_router, users, products, transactions, analytics, audit
 
 app = FastAPI(title="Merchberry ERP API")
 
@@ -30,5 +30,6 @@ app.include_router(users.router)
 app.include_router(products.router)
 app.include_router(transactions.router)
 app.include_router(analytics.router)
+app.include_router(audit.router)
 
 # Если захочешь проверить, работает ли сервер, перейди на http://127.0.0.1:8000/docs
