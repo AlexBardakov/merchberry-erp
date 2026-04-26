@@ -183,14 +183,13 @@ def create_manual_transaction(
 def run_b2b_sync(session: Session):
     client = BusinessRuClient()
 
-    # 1. Проверяем, есть ли уже записи от Бизнес.Ру
+    # 1. Проверяем, есть ли уже записи от Бизнес.Ру по наличию external_check_id
     existing_check = session.exec(
-        select(Transaction).where(Transaction.comment.ilike("%(Бизнес.Ру)%")).limit(1)
+        select(Transaction).where(Transaction.external_check_id != None).limit(1)
     ).first()
 
     all_checks = []
     if not existing_check:
-        # Первая загрузка — тянем всё (по 250 за раз)
         page = 1
         while True:
             checks = client.get_checks(limit=250, page=page)
@@ -198,56 +197,104 @@ def run_b2b_sync(session: Session):
             all_checks.extend(checks)
             page += 1
     else:
-        # Регулярная загрузка — последние 100
         all_checks = client.get_checks(limit=100, page=1)
 
     processed_count = 0
-    skipped_count = 0  # Добавили счетчик пропущенных чеков
+    skipped_count = 0
     total_revenue = 0.0
 
     for sale in all_checks:
         check_id = str(sale.get("id"))
 
-        # Проверка на дубликаты чека
-        if session.exec(select(Transaction).where(Transaction.comment.ilike(f"%Чек #{check_id}%"))).first():
-            skipped_count += 1  # Считаем пропущенные
+        # Жесткая защита от дублирования по ID чека Бизнес.ру
+        if session.exec(select(Transaction).where(Transaction.external_check_id == check_id)).first():
+            skipped_count += 1
             continue
+
+        # Группировка товаров по ID авторов (None - для ничейных)
+        # Формат: { seller_id: {"full_amount": 0, "profit": 0, "commission": 0, "items": []} }
+        grouped_data = {}
 
         for item in sale.get("goods", []):
             b2b_good_id = str(item.get("good_id", "")).strip()
+
+            # Сумма берется строго из чека Бизнес.ру (абсолютный приоритет)
             price = float(item.get("price", 0))
             count = int(float(item.get("amount", 1)))
+            name = item.get("name", "Неизвестный товар")
 
             product = session.exec(select(Product).where(Product.sku == b2b_good_id)).first()
+            seller_id = product.seller_id if product else None
 
+            # Списываем остатки на складе
             if product:
-                old_stock = product.stock
                 product.stock = max(0, product.stock - count)
                 session.add(product)
 
-                if product.seller_id:
-                    seller = session.exec(select(User).where(User.id == product.seller_id).with_for_update()).first()
-                    if seller and seller.is_active:
-                        profit = (price * count) * (1 - seller.commission_percent / 100.0)
+            # Инициализируем группу автора, если её еще нет
+            if seller_id not in grouped_data:
+                grouped_data[seller_id] = {
+                    "full_amount": 0.0, "profit": 0.0, "commission": 0.0, "items": []
+                }
 
-                        new_tx = Transaction(
-                            type="sale",
-                            amount=profit,
-                            seller_id=seller.id,
-                            product_identifier=product.name,
-                            comment=f"Чек #{check_id} (Бизнес.Ру)"
-                        )
-                        seller.balance += profit
-                        session.add(new_tx)
+            total_item_price = price * count
+            grouped_data[seller_id]["full_amount"] += total_item_price
+            grouped_data[seller_id]["items"].append(f"{name} ({count} шт.)")
 
-                        processed_count += 1
-                        total_revenue += (price * count)
+            # Расчет прибыли и комиссии
+            if seller_id:
+                seller = session.get(User, seller_id)
+                commission_rate = seller.commission_percent if (seller and seller.is_active) else 15.0
+                profit = total_item_price * (1 - commission_rate / 100.0)
+                commission = total_item_price - profit
+            else:
+                # Для ничейных товаров комиссию пока не считаем (можно будет привязать позже)
+                profit = total_item_price
+                commission = 0.0
+
+            grouped_data[seller_id]["profit"] += profit
+            grouped_data[seller_id]["commission"] += commission
+
+        # Создаем объединенные транзакции на основе сгруппированных данных
+        for s_id, data in grouped_data.items():
+            # Формируем строку проданных товаров для всплывающего окна
+            items_str = ", ".join(data["items"])
+
+            new_tx = Transaction(
+                type="sale",
+                full_amount=data["full_amount"],
+                amount=data["profit"],
+                commission_amount=data["commission"],
+                seller_id=s_id,
+                product_identifier=items_str,
+                comment=f"Чек #{check_id} (Бизнес.Ру)",
+                external_check_id=check_id
+            )
+            session.add(new_tx)
+
+            # Если транзакция не ничейная, пополняем баланс автора
+            if s_id:
+                seller = session.exec(select(User).where(User.id == s_id).with_for_update()).first()
+                if seller and seller.is_active:
+                    seller.balance += data["profit"]
+                    session.add(seller)
+
+            processed_count += 1
+            total_revenue += data["full_amount"]
 
     session.commit()
 
-    # ВОЗВРАЩАЕМ ТОЧНО ТЕ КЛЮЧИ, КОТОРЫЕ ЖДЕТ REACT (Sync.tsx)
+    # Формируем читаемый ответ для фронтенда с логикой ошибок
+    if processed_count == 0 and skipped_count == 0:
+        return {
+            "status": "error",
+            "message": "Новых чеков не найдено, повторений тоже нет. Убедитесь, что API ключ Бизнес.Ру действителен и есть продажи.",
+            "processed_items": 0, "skipped_checks": 0, "total_revenue": 0
+        }
+
     return {
-        "message": "Синхронизация успешно завершена",
+        "status": "success",
+        "message": f"Синхронизация завершена. Обработано новых транзакций: {processed_count}.",
         "processed_items": processed_count,
         "skipped_checks": skipped_count,
         "total_revenue": total_revenue

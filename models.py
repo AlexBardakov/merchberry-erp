@@ -49,18 +49,31 @@ class Product(SQLModel, table=True):
 
 
 # --- ТАБЛИЦА: ТРАНЗАКЦИИ ---
+# --- ТАБЛИЦА: ТРАНЗАКЦИИ ---
 class Transaction(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     type: str
-    amount: float
-    commission_amount: float = Field(default=0.0)
+
+    # Финансы
+    full_amount: float = Field(default=0.0)  # Полная сумма продажи
+    amount: float  # Чистая прибыль (за вычетом комиссии)
+    commission_amount: float = Field(default=0.0)  # Сумма комиссии
 
     date: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     comment: Optional[str] = Field(default=None)
 
-    seller_id: int = Field(foreign_key="user.id")
+    # Привязка к продавцу теперь опциональна (для "ничейных" транзакций)
+    seller_id: Optional[int] = Field(default=None, foreign_key="user.id")
     seller: Optional[User] = Relationship(back_populates="transactions")
+
+    # Хранение списка проданных товаров в виде строки для всплывающего окна
     product_identifier: Optional[str] = Field(default=None)
+
+    # Идентификатор чека из Бизнес.ру для жесткой защиты от дублирования
+    external_check_id: Optional[str] = Field(default=None, index=True)
+
+    # Флаг ручной перепривязки админом, чтобы синхронизация не сбрасывала изменения
+    is_manual_assigned: bool = Field(default=False)
 
 
 # --- НОВОЕ: ТАБЛИЦА ЛОГОВ (Шаг 2) ---

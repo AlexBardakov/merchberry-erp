@@ -1,12 +1,13 @@
 import csv
 import io
+import secrets
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from sqlmodel import Session, select, col, or_
 from typing import List, Optional
 
 from database import get_session
 from models import Product, User
-from auth import get_current_user, get_current_admin
+from auth import get_current_user, get_current_admin, get_password_hash
 from schemas import ProductDiff, ImportConfirmRequest, ProductUpdateRequest, ProductRead
 from utils import create_audit_log
 
@@ -163,27 +164,51 @@ async def preview_products_import(
 
     reader = csv.DictReader(io.StringIO(text), delimiter=delimiter)
 
+    # 1. Строгая проверка обязательных столбцов
+    required_columns = [
+        "Наименование",
+        "Группа товаров",
+        "Цены отпускные. Отпускные розничные",
+        "Все склады. Общий остаток",
+        "Внешние коды. ID из Бизнес.ру"
+    ]
+
+    if not reader.fieldnames:
+        raise HTTPException(status_code=400, detail="Файл пуст или не содержит заголовков.")
+
+    # Очищаем заголовки от возможных пробелов по краям
+    actual_columns = [col.strip() for col in reader.fieldnames if col]
+
+    missing_columns = [col for col in required_columns if col not in actual_columns]
+
+    if missing_columns:
+        missing_cols_str = ", ".join(f"'{col}'" for col in missing_columns)
+        raise HTTPException(
+            status_code=400,
+            detail=f"Отсутствуют обязательные столбцы для выгрузки: {missing_cols_str}. Проверьте файл."
+        )
+
+    all_users = session.exec(select(User)).all()
+    user_id_to_name = {u.id: u.username for u in all_users}
+
     new_products, changed_products, unchanged_products = [], [], []
+    conflicts = []  # ДОБАВЛЕНО: Массив для конфликтов
+    csv_authors = set()
 
     for row in reader:
-        name, sku, price_raw, stock_raw = "", "", "0", "0"
+        clean_row = {k.strip(): v for k, v in row.items() if k}
 
-        for k, v in row.items():
-            if not k: continue
-            k_lower = str(k).lower()
-            val = str(v).strip() if v is not None else ""
+        name = str(clean_row.get("Наименование", "")).strip()
+        group = str(clean_row.get("Группа товаров", "")).strip()
+        price_raw = str(clean_row.get("Цены отпускные. Отпускные розничные", "0")).strip()
+        stock_raw = str(clean_row.get("Все склады. Общий остаток", "0")).strip()
+        external_id = str(clean_row.get("Внешние коды. ID из Бизнес.ру", "")).strip()
 
-            if 'наименов' in k_lower or 'назван' in k_lower or 'name' in k_lower:
-                name = val
-            elif 'артикул' in k_lower or 'sku' in k_lower or 'код' in k_lower:
-                sku = val
-            elif 'цен' in k_lower or 'price' in k_lower:
-                price_raw = val
-            elif 'остат' in k_lower or 'stock' in k_lower or 'кол' in k_lower:
-                stock_raw = val
-
-        if not name:
+        if not name or not external_id:
             continue
+
+        if group:
+            csv_authors.add(group)
 
         try:
             price = float(price_raw.replace(" ", "").replace(",", "."))
@@ -191,33 +216,50 @@ async def preview_products_import(
         except ValueError:
             price, stock = 0.0, 0
 
-        db_product = None
-        if sku:
-            db_product = session.exec(
-                select(Product).where(Product.sku == sku)).first()
-        if not db_product:
-            db_product = session.exec(
-                select(Product).where(Product.name == name)).first()
+        sku = external_id
+
+        db_product = session.exec(select(Product).where(Product.sku == sku)).first()
+
+        # ДОБАВЛЕНО: Проверка на конфликт авторов (Задача 6)
+        if db_product and db_product.seller_id is not None:
+            current_author_name = user_id_to_name.get(db_product.seller_id, "Неизвестно")
+            csv_author_name = group if group else "Без автора"
+
+            # Если авторы не совпадают и в CSV реально указан какой-то автор
+            if current_author_name != csv_author_name and group:
+                conflicts.append({
+                    "product_name": db_product.name,
+                    "current_author": current_author_name,
+                    "csv_author": csv_author_name
+                })
 
         diff = ProductDiff(
-            sku=sku, name=name,
+            sku=sku,
+            name=name,
             old_price=db_product.base_price if db_product else 0.0,
             new_price=price,
             old_stock=db_product.stock if db_product else 0,
-            new_stock=stock
+            new_stock=stock,
+            seller_name=group if group else None
         )
 
         if not db_product:
             new_products.append(diff)
-        elif db_product.base_price != price or db_product.stock != stock:
+        elif db_product.base_price != price or db_product.stock != stock or db_product.name != name:
             changed_products.append(diff)
         else:
             unchanged_products.append(diff)
 
+    existing_users = session.exec(select(User).where(User.username.in_(list(csv_authors)))).all()
+    existing_usernames = {u.username for u in existing_users}
+    new_authors = list(csv_authors - existing_usernames)
+
     return {
         "new_products": new_products,
         "changed_products": changed_products,
-        "unchanged_products": unchanged_products
+        "unchanged_products": unchanged_products,
+        "new_authors": new_authors,
+        "conflicts": conflicts  # ДОБАВЛЕНО: Отдаем конфликты на фронт
     }
 
 
@@ -227,32 +269,112 @@ def confirm_products_import(
         admin_data: dict = Depends(get_current_admin),
         session: Session = Depends(get_session)
 ):
-    stats = {"added": 0, "updated": 0}
+    stats = {"added": 0, "updated": 0, "authors_created": 0}
+    admin_username = admin_data.get("username", "admin")
 
+    # ДОБАВЛЕНО: 1. Создаем новых авторов, если админ дал добро
+    if request.authors_to_create:
+        for author_name in request.authors_to_create:
+            existing = session.exec(select(User).where(User.username == author_name)).first()
+            if not existing:
+                random_pass = secrets.token_hex(4)  # Генерируем 8-значный пароль
+                new_user = User(
+                    username=author_name,
+                    role="seller",
+                    hashed_password=get_password_hash(random_pass),
+                    is_active=True
+                )
+                session.add(new_user)
+                stats["authors_created"] += 1
+        session.commit()  # Коммитим, чтобы база выдала ID новым авторам
+
+    # Получаем словарь всех авторов { "Имя": ID }, чтобы быстро искать
+    all_users = session.exec(select(User)).all()
+    user_map = {u.username: u.id for u in all_users}
+
+    # Обработка измененных товаров
     for diff in request.changed_products:
-        db_product = None
         if diff.sku:
-            db_product = session.exec(
-                select(Product).where(Product.sku == diff.sku)).first()
-        if not db_product:
-            db_product = session.exec(
-                select(Product).where(Product.name == diff.name)).first()
+            db_product = session.exec(select(Product).where(Product.sku == diff.sku)).first()
 
-        if db_product:
-            db_product.base_price = diff.new_price
-            db_product.stock = diff.new_stock
-            session.add(db_product)
-            stats["updated"] += 1
+            if db_product:
+                changes = {}
 
+                if db_product.base_price != diff.new_price:
+                    changes["base_price"] = {"old": db_product.base_price, "new": diff.new_price}
+                    db_product.base_price = diff.new_price
+
+                if db_product.stock != diff.new_stock:
+                    changes["stock"] = {"old": db_product.stock, "new": diff.new_stock}
+                    db_product.stock = diff.new_stock
+
+                if db_product.name != diff.name:
+                    changes["name"] = {"old": db_product.name, "new": diff.name}
+                    db_product.name = diff.name
+
+                # ДОБАВЛЕНО: Привязка автора (если товар был ничейным или автор поменялся)
+                # Логику "конфликта" из Задачи 6 мы добавим сюда на следующем шаге!
+                seller_id = user_map.get(diff.seller_name) if diff.seller_name else None
+                if db_product.seller_id != seller_id and seller_id is not None:
+                    changes["seller_id"] = {"old": db_product.seller_id, "new": seller_id}
+                    db_product.seller_id = seller_id
+
+                if changes:
+                    if request.comment:
+                        changes["comment"] = request.comment
+
+                    session.add(db_product)
+
+                    create_audit_log(
+                        session=session,
+                        actor=admin_username,
+                        entity_name="Product",
+                        entity_id=db_product.id,
+                        action="import_update",
+                        changes=changes
+                    )
+                stats["updated"] += 1
+
+    # Обработка новых товаров
     for diff in request.new_products:
-        new_product = Product(
-            sku=diff.sku,
-            name=diff.name,
-            base_price=diff.new_price,
-            stock=diff.new_stock,
-            seller_id=None
+        seller_id = user_map.get(diff.seller_name) if diff.seller_name else None
+        if db_product.seller_id is None and seller_id is not None:
+            changes["seller_id"] = {"old": None, "new": seller_id}
+            db_product.seller_id = seller_id
+
+        if changes:
+
+            new_product = Product(
+                sku=diff.sku,
+                name=diff.name,
+                base_price=diff.new_price,
+                stock=diff.new_stock,
+                seller_id=seller_id  # ДОБАВЛЕНО: Присваиваем ID автора
+            )
+            session.add(new_product)
+            session.commit()
+            session.refresh(new_product)
+
+            changes = {
+                "status": "created",
+                "initial_stock": diff.new_stock,
+                "initial_price": diff.new_price
+            }
+        if seller_id:
+            changes["seller_id"] = seller_id
+
+        if request.comment:
+            changes["comment"] = request.comment
+
+        create_audit_log(
+            session=session,
+            actor=admin_username,
+            entity_name="Product",
+            entity_id=new_product.id,
+            action="import_create",
+            changes=changes
         )
-        session.add(new_product)
+
         stats["added"] += 1
 
     session.commit()
