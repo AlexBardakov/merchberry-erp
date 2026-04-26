@@ -1,99 +1,182 @@
+// src/pages/Sync.tsx
 import React, { useState } from 'react';
-import { RefreshCw, Server, AlertTriangle, CheckCircle, ArrowRight } from 'lucide-react';
+import { RefreshCw, CheckCircle, AlertTriangle, Receipt, Info, CloudDownload } from 'lucide-react';
 import apiClient from '../api/axios';
+
+interface SyncConflict {
+  check_id: string;
+  products: string;
+}
+
+interface SyncResult {
+  status: string;
+  message: string;
+  processed_items: number;
+  skipped_checks: number;
+  total_revenue: number;
+  conflicts: SyncConflict[];
+}
 
 export const Sync = () => {
   const [isSyncing, setIsSyncing] = useState(false);
-  const [syncResult, setSyncResult] = useState<any>(null);
-  const [error, setError] = useState('');
+  const [result, setResult] = useState<SyncResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const userRole = localStorage.getItem('userRole');
+  const isAdmin = userRole === 'admin';
 
   const handleSync = async () => {
     setIsSyncing(true);
-    setError('');
-    setSyncResult(null);
+    setError(null);
+    setResult(null);
 
     try {
+      // Эндпоинт теперь не требует параметров, он все делает автоматически
       const res = await apiClient.post('/transactions/sync/sales');
-      setSyncResult(res.data);
+      setResult(res.data);
     } catch (err: any) {
-      setError(err.response?.data?.detail || 'Ошибка при синхронизации. Проверьте консоль сервера.');
+      setError(err.response?.data?.detail || "Произошла ошибка при обращении к серверу синхронизации.");
     } finally {
       setIsSyncing(false);
     }
   };
 
+  if (!isAdmin) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <p className="text-gray-500 font-medium">Доступ к этому разделу есть только у администратора.</p>
+      </div>
+    );
+  }
+
   return (
-    <div className="space-y-6 max-w-4xl mx-auto">
-      <div className="flex flex-col items-center text-center space-y-4 mb-8">
-        <div className="w-16 h-16 bg-indigo-100 text-indigo-600 rounded-2xl flex items-center justify-center">
-          <Server size={32} />
-        </div>
+    <div className="max-w-4xl mx-auto space-y-6">
+      
+      <div className="flex justify-between items-end mb-8">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900">Синхронизация Бизнес.Ру</h1>
-          <p className="text-gray-500 mt-2 max-w-lg mx-auto">
-            Обновление данных о продажах. Система загрузит новые чеки, найдет товары по артикулам и автоматически распределит прибыль по балансам авторов.
-          </p>
+          <h1 className="text-2xl font-bold text-gray-900">Синхронизация продаж</h1>
+          <p className="text-gray-500 mt-1">Загрузка новых чеков из системы Бизнес.Ру</p>
         </div>
       </div>
 
-      <div className="bg-white p-8 rounded-3xl shadow-sm border border-gray-100 flex flex-col items-center">
+      {/* Информационный блок о логике синхронизации */}
+      <div className="bg-blue-50 p-6 rounded-2xl border border-blue-100 flex gap-4 items-start">
+        <div className="text-blue-600 mt-1">
+          <Info size={24} />
+        </div>
+        <div>
+          <h3 className="font-bold text-blue-900 mb-2">Как работает синхронизация?</h3>
+          <ul className="text-sm text-blue-800 space-y-2 list-disc list-inside">
+            <li>
+              <strong>Первая выгрузка:</strong> Система загрузит все исторические чеки, чтобы сформировать финансовую статистику, <strong>без изменения складских остатков</strong> (остатки берутся из загруженного CSV).
+            </li>
+            <li>
+              <strong>Последующие выгрузки:</strong> Система будет проверять только последние транзакции, зачислять деньги на балансы авторов и <strong>автоматически списывать проданные остатки</strong> со склада.
+            </li>
+            <li>
+              <strong>Защита от дублей:</strong> Повторные нажатия кнопки безопасны. Загруженные ранее чеки игнорируются.
+            </li>
+          </ul>
+        </div>
+      </div>
 
+      {/* Панель управления */}
+      <div className="bg-white p-8 rounded-2xl shadow-sm border border-gray-100 text-center">
+        <CloudDownload size={48} className="mx-auto text-indigo-300 mb-4" />
+        <h2 className="text-xl font-bold text-gray-800 mb-2">Готовность к загрузке</h2>
+        <p className="text-gray-500 mb-6 max-w-md mx-auto">
+          Нажмите на кнопку ниже, чтобы подключиться к Бизнес.Ру и получить новые данные о продажах.
+        </p>
+        
         <button
           onClick={handleSync}
           disabled={isSyncing}
-          className={`flex items-center gap-3 px-8 py-4 rounded-xl text-lg font-bold text-white transition-all shadow-md
-            ${isSyncing ? 'bg-indigo-400 cursor-not-allowed scale-95' : 'bg-indigo-600 hover:bg-indigo-700 hover:scale-105'}
-          `}
+          className="inline-flex items-center gap-2 px-8 py-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-lg transition-all disabled:opacity-70 shadow-md hover:shadow-lg disabled:cursor-not-allowed"
         >
-          <RefreshCw size={24} className={isSyncing ? 'animate-spin' : ''} />
-          {isSyncing ? 'Связь с API...' : 'Запустить синхронизацию'}
+          {isSyncing ? (
+            <>
+              <RefreshCw className="animate-spin" size={24} />
+              Обработка данных...
+            </>
+          ) : (
+            <>
+              <RefreshCw size={24} />
+              Запустить синхронизацию
+            </>
+          )}
         </button>
+      </div>
 
-        <p className="text-sm text-gray-400 mt-4">
-          Последняя автоматическая синхронизация: <strong>Вчера в 23:59</strong>
-        </p>
-
-        {/* БЛОК С ОШИБКОЙ */}
-        {error && (
-          <div className="mt-8 p-4 bg-red-50 text-red-700 rounded-xl border border-red-100 flex items-start gap-3 w-full animate-in fade-in">
-            <AlertTriangle className="shrink-0 mt-0.5" />
-            <p className="font-medium">{error}</p>
+      {/* Блок ошибок */}
+      {error && (
+        <div className="bg-red-50 p-6 rounded-2xl border border-red-200 flex items-center gap-4 animate-in fade-in">
+          <AlertTriangle className="text-red-500" size={32} />
+          <div>
+            <h3 className="font-bold text-red-900">Ошибка синхронизации</h3>
+            <p className="text-red-700">{error}</p>
           </div>
-        )}
+        </div>
+      )}
 
-        {/* БЛОК С РЕЗУЛЬТАТАМИ */}
-        {syncResult && (
-          <div className="mt-8 w-full animate-in fade-in slide-in-from-bottom-4">
-            <div className="bg-green-50 border border-green-100 rounded-2xl p-6">
-              <div className="flex items-center gap-2 text-green-800 mb-4">
-                <CheckCircle size={24} />
-                <h3 className="text-lg font-bold">Успешно обработано!</h3>
-              </div>
-
-              <div className="grid grid-cols-3 gap-4">
-                <div className="bg-white p-4 rounded-xl border border-green-100 shadow-sm text-center">
-                  <p className="text-3xl font-bold text-gray-900">{syncResult.processed_items}</p>
-                  <p className="text-xs text-gray-500 uppercase tracking-wider font-bold mt-1">Новых позиций</p>
-                </div>
-                <div className="bg-white p-4 rounded-xl border border-green-100 shadow-sm text-center">
-                  <p className="text-3xl font-bold text-gray-900">{syncResult.skipped_checks}</p>
-                  <p className="text-xs text-gray-500 uppercase tracking-wider font-bold mt-1">Пропущено (Дубли)</p>
-                </div>
-                <div className="bg-white p-4 rounded-xl border border-green-100 shadow-sm text-center">
-                  <p className="text-3xl font-bold text-indigo-600">{syncResult.total_revenue.toLocaleString('ru-RU')} ₽</p>
-                  <p className="text-xs text-indigo-400 uppercase tracking-wider font-bold mt-1">Оборот</p>
-                </div>
-              </div>
-
-              <div className="mt-6 flex justify-center">
-                <a href="/finance" className="flex items-center gap-1 text-sm font-bold text-green-700 hover:text-green-800 transition-colors">
-                  Посмотреть новые операции в Финансах <ArrowRight size={16} />
-                </a>
-              </div>
+      {/* Результаты синхронизации */}
+      {result && (
+        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4">
+          
+          <div className={`p-6 rounded-2xl border flex items-center gap-4 ${result.status === 'success' ? 'bg-green-50 border-green-200' : 'bg-yellow-50 border-yellow-200'}`}>
+            {result.status === 'success' ? (
+              <CheckCircle className="text-green-600" size={32} />
+            ) : (
+              <AlertTriangle className="text-yellow-600" size={32} />
+            )}
+            <div>
+              <h3 className={`font-bold text-lg ${result.status === 'success' ? 'text-green-900' : 'text-yellow-900'}`}>
+                {result.message}
+              </h3>
             </div>
           </div>
-        )}
-      </div>
+
+          {/* Статистика */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 text-center">
+              <p className="text-sm font-medium text-gray-500 mb-1">Загружено новых чеков</p>
+              <p className="text-3xl font-bold text-indigo-600">{result.processed_items}</p>
+            </div>
+            <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 text-center">
+              <p className="text-sm font-medium text-gray-500 mb-1">Пропущено (уже в базе)</p>
+              <p className="text-3xl font-bold text-gray-700">{result.skipped_checks}</p>
+            </div>
+            <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 text-center">
+              <p className="text-sm font-medium text-gray-500 mb-1">Сумма новых продаж</p>
+              <p className="text-3xl font-bold text-green-600">{result.total_revenue.toLocaleString('ru-RU')} ₽</p>
+            </div>
+          </div>
+
+          {/* Мягкие уведомления о конфликтах (Задача 2 из раздела Финансы) */}
+          {result.conflicts && result.conflicts.length > 0 && (
+            <div className="bg-orange-50 p-6 rounded-2xl border border-orange-200">
+              <div className="flex items-center gap-2 mb-4">
+                <AlertTriangle className="text-orange-600" size={24} />
+                <h3 className="font-bold text-orange-900 text-lg">Обратите внимание: Конфликты перепривязки</h3>
+              </div>
+              <p className="text-orange-800 text-sm mb-4">
+                Система обнаружила чеки, которые присутствуют в текущей выгрузке Бизнес.Ру, но ранее вы вручную изменили автора (владельца) для этих транзакций. Чтобы не сломать ваши ручные корректировки балансов, <strong>система не стала возвращать этих авторов к значениям по умолчанию</strong> из Бизнес.Ру.
+              </p>
+              <div className="bg-white rounded-lg border border-orange-100 overflow-hidden">
+                <ul className="divide-y divide-orange-100 max-h-60 overflow-y-auto">
+                  {result.conflicts.map((conflict, idx) => (
+                    <li key={idx} className="p-3 text-sm flex gap-4">
+                      <span className="font-mono text-gray-500 w-24 flex-shrink-0">Чек #{conflict.check_id}</span>
+                      <span className="text-gray-800">{conflict.products}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          )}
+
+        </div>
+      )}
+
     </div>
   );
 };

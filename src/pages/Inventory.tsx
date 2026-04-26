@@ -11,7 +11,7 @@ interface Product {
   base_price: number;
   stock: number;
   seller_id: number | null;
-  is_obsolete?: boolean; // Добавлено для архива
+  is_obsolete?: boolean;
 }
 
 interface Seller {
@@ -33,13 +33,17 @@ export const Inventory = () => {
   // Фильтры и Поиск
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState('name_asc');
-  const [sellerFilter, setSellerFilter] = useState('all'); // 'all', 'unassigned', или ID
+  const [sellerFilter, setSellerFilter] = useState('all');
   const [includeObsolete, setIncludeObsolete] = useState(false);
 
-  // Состояния для импорта (Оригинальные)
+  // Состояния для импорта
   const [importFile, setImportFile] = useState<File | null>(null);
   const [previewData, setPreviewData] = useState<any>(null);
   const [isImporting, setIsImporting] = useState(false);
+
+  // НОВЫЕ СОСТОЯНИЯ: Комментарий и авторы
+  const [importComment, setImportComment] = useState('');
+  const [authorsToCreate, setAuthorsToCreate] = useState<string[]>([]);
 
   // Инлайн-редактирование
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -54,18 +58,15 @@ export const Inventory = () => {
 
   // Загрузка данных
   useEffect(() => {
-    // Сбрасываем выделение при смене страницы или фильтров
     setSelectedIds([]);
     fetchProducts();
     if (isAdmin && sellers.length === 0) fetchSellers();
   }, [page, sortBy, includeObsolete, sellerFilter]);
-  // Примечание: searchQuery обрабатываем по кнопке или с задержкой (пока сделаем обновление по Enter/Blur)
 
   const fetchProducts = async () => {
     try {
       setIsLoading(true);
       const offset = (page - 1) * limit;
-      // Отправляем все параметры на бэкенд
       const res = await apiClient.get('/products/', {
         params: {
           limit, offset, sort_by: sortBy, include_obsolete: includeObsolete,
@@ -90,7 +91,7 @@ export const Inventory = () => {
     }
   };
 
-  // --- ЛОГИКА ИМПОРТА CSV (БЕЗ ИЗМЕНЕНИЙ) ---
+  // --- ЛОГИКА ИМПОРТА CSV ---
   const handlePreviewImport = async () => {
     if (!importFile) return;
     setIsImporting(true);
@@ -101,9 +102,19 @@ export const Inventory = () => {
           headers: { 'Content-Type': 'multipart/form-data' }
         });
       setPreviewData(res.data);
-    } catch (error) {
+      // По умолчанию предлагаем создать всех найденных новых авторов
+      if (res.data.new_authors) {
+        setAuthorsToCreate(res.data.new_authors);
+      }
+      setImportComment('');
+    } catch (error: any) {
       console.error(error);
-      alert("Ошибка при чтении файла. Проверьте формат CSV.");
+      // Обработка строгой валидации столбцов (Задача 1)
+      if (error.response && error.response.data && error.response.data.detail) {
+        alert(`Ошибка загрузки: ${error.response.data.detail}`);
+      } else {
+        alert("Ошибка при чтении файла. Проверьте формат CSV.");
+      }
     } finally {
       setIsImporting(false);
     }
@@ -115,12 +126,17 @@ export const Inventory = () => {
     try {
       await apiClient.post('/products/import/confirm', {
         new_products: previewData.new_products,
-        changed_products: previewData.changed_products
+        changed_products: previewData.changed_products,
+        comment: importComment,               // Отправляем комментарий (Задача 2)
+        authors_to_create: authorsToCreate    // Отправляем список авторов для создания (Задача 4)
       });
       alert("Товары успешно импортированы!");
       setPreviewData(null);
       setImportFile(null);
+      setImportComment('');
+      setAuthorsToCreate([]);
       fetchProducts();
+      if (authorsToCreate.length > 0) fetchSellers(); // Обновляем список продавцов, если создали новых
     } catch (error) {
       alert("Ошибка при сохранении товаров.");
     } finally {
@@ -128,9 +144,34 @@ export const Inventory = () => {
     }
   };
 
+  const cancelImport = () => {
+    setPreviewData(null);
+    setImportFile(null);
+    setImportComment('');
+    setAuthorsToCreate([]);
+  };
+
   // --- ЛОГИКА ТОВАРОВ И МАССОВЫХ ДЕЙСТВИЙ ---
   const handleAssignSeller = async (productId: number, sellerId: string) => {
     if (!sellerId) return;
+
+    // Находим товар и выбранного продавца, чтобы показать их имена в окне подтверждения
+    const product = products.find(p => p.id === productId);
+    const seller = sellers.find(s => s.id === parseInt(sellerId));
+
+    if (!product || !seller) return;
+
+    const actionText = product.seller_id
+      ? `Вы уверены, что хотите ПЕРЕПРИВЯЗАТЬ товар "${product.name}" на продавца ${seller.username}?`
+      : `Вы уверены, что хотите ПРИВЯЗАТЬ товар "${product.name}" к продавцу ${seller.username}?`;
+
+    // Если админ нажал "Отмена", прерываем выполнение. Select сам откатится назад.
+    if (!window.confirm(actionText)) {
+      // Чтобы визуально сбросить select сразу же, можно принудительно обновить стейт тем же массивом:
+      setProducts([...products]);
+      return;
+    }
+
     try {
       await apiClient.patch(`/products/${productId}`, { seller_id: parseInt(sellerId) });
       setProducts(products.map(p => p.id === productId ? { ...p, seller_id: parseInt(sellerId) } : p));
@@ -166,7 +207,6 @@ export const Inventory = () => {
     }
   };
 
-  // Массовое выделение
   const handleSelectAll = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.checked) {
       setSelectedIds(products.map(p => p.id));
@@ -216,13 +256,13 @@ export const Inventory = () => {
         </div>
       </div>
 
-      {/* ОРИГИНАЛЬНАЯ ПАНЕЛЬ ИМПОРТА */}
+      {/* ПАНЕЛЬ ИМПОРТА */}
       {isAdmin && !previewData && (
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-indigo-100 flex items-center gap-4">
           <div className="p-3 bg-indigo-50 text-indigo-600 rounded-xl"><UploadCloud size={24} /></div>
           <div className="flex-1">
             <h3 className="font-semibold text-gray-800">Импорт из Бизнес.Ру (CSV)</h3>
-            <p className="text-sm text-gray-500">Загрузите файл с колонками: Артикул, Наименование, Цена, Остаток</p>
+            <p className="text-sm text-gray-500">Обязательные колонки: Наименование, Группа товаров, Цены..., Остаток, Внешние коды...</p>
           </div>
           <input
             type="file" accept=".csv"
@@ -238,10 +278,11 @@ export const Inventory = () => {
         </div>
       )}
 
-      {/* ОРИГИНАЛЬНОЕ ПРЕВЬЮ ИМПОРТА */}
+      {/* ПРЕВЬЮ ИМПОРТА С НОВЫМ ФУНКЦИОНАЛОМ */}
       {previewData && (
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-orange-200 animate-in fade-in">
           <h2 className="text-xl font-bold text-gray-800 mb-4">Результаты сканирования файла</h2>
+
           <div className="grid grid-cols-3 gap-4 mb-6">
             <div className="bg-green-50 p-4 rounded-xl border border-green-100">
               <p className="text-green-800 font-bold text-lg">{previewData.new_products.length}</p>
@@ -256,11 +297,67 @@ export const Inventory = () => {
               <p className="text-sm text-gray-500">Без изменений</p>
             </div>
           </div>
+
+          {/* КОНФЛИКТЫ АВТОРОВ (Задача 6) */}
+          {previewData.conflicts && previewData.conflicts.length > 0 && (
+            <div className="mb-6 bg-red-50 p-4 rounded-xl border border-red-200">
+              <h3 className="text-red-800 font-bold mb-2 flex items-center gap-2">
+                <AlertTriangle size={18} /> Внимание: Конфликт авторов
+              </h3>
+              <p className="text-sm text-red-600 mb-2">
+                Следующие товары уже привязаны к другим авторам. Привязка не будет изменена, но цены и остатки обновятся:
+              </p>
+              <ul className="list-disc list-inside text-sm text-red-700 space-y-1 max-h-40 overflow-y-auto">
+                {previewData.conflicts.map((c: any, idx: number) => (
+                  <li key={idx}>
+                    <strong>{c.product_name}</strong>: сейчас у <em>{c.current_author}</em>, в файле — <em>{c.csv_author}</em>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* НОВЫЕ АВТОРЫ (Задачи 4 и 5) */}
+          {previewData.new_authors && previewData.new_authors.length > 0 && (
+            <div className="mb-6 bg-indigo-50 p-4 rounded-xl border border-indigo-100">
+              <h3 className="text-indigo-800 font-bold mb-2">Найдены новые авторы:</h3>
+              <p className="text-sm text-indigo-600 mb-3">Выберите, кого из них создать автоматически (им будет сгенерирован случайный пароль):</p>
+              <div className="space-y-2 max-h-40 overflow-y-auto">
+                {previewData.new_authors.map((author: string, idx: number) => (
+                  <label key={idx} className="flex items-center gap-2 cursor-pointer hover:bg-indigo-100 p-1 rounded transition-colors w-fit">
+                    <input
+                      type="checkbox"
+                      className="rounded text-indigo-600 focus:ring-indigo-500 w-4 h-4 cursor-pointer"
+                      checked={authorsToCreate.includes(author)}
+                      onChange={(e) => {
+                        if (e.target.checked) setAuthorsToCreate([...authorsToCreate, author]);
+                        else setAuthorsToCreate(authorsToCreate.filter(a => a !== author));
+                      }}
+                    />
+                    <span className="text-sm font-medium text-indigo-900">{author}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* КОММЕНТАРИЙ К ИМПОРТУ (Задача 2) */}
+          <div className="mb-6">
+            <label className="block text-sm font-semibold text-gray-700 mb-2">Комментарий к импорту (опционально):</label>
+            <input
+              type="text"
+              className="w-full border border-gray-300 rounded-lg px-4 py-2 outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all"
+              placeholder="Например: Поступление новой партии брелоков"
+              value={importComment}
+              onChange={(e) => setImportComment(e.target.value)}
+            />
+          </div>
+
           <div className="flex gap-4">
-            <button onClick={handleConfirmImport} disabled={isImporting} className="flex-1 py-3 bg-green-600 hover:bg-green-700 text-white rounded-lg font-bold">
+            <button onClick={handleConfirmImport} disabled={isImporting} className="flex-1 py-3 bg-green-600 hover:bg-green-700 text-white rounded-lg font-bold transition-colors">
               Подтвердить и Загрузить в базу
             </button>
-            <button onClick={() => { setPreviewData(null); setImportFile(null); }} className="px-6 py-3 bg-gray-200 hover:bg-gray-300 text-gray-800 rounded-lg font-medium">
+            <button onClick={cancelImport} className="px-6 py-3 bg-gray-200 hover:bg-gray-300 text-gray-800 rounded-lg font-medium transition-colors">
               Отмена
             </button>
           </div>

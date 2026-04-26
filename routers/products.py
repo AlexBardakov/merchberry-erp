@@ -272,12 +272,12 @@ def confirm_products_import(
     stats = {"added": 0, "updated": 0, "authors_created": 0}
     admin_username = admin_data.get("username", "admin")
 
-    # ДОБАВЛЕНО: 1. Создаем новых авторов, если админ дал добро
+    # 1. Создаем новых авторов, если админ выбрал их на фронтенде
     if request.authors_to_create:
         for author_name in request.authors_to_create:
             existing = session.exec(select(User).where(User.username == author_name)).first()
             if not existing:
-                random_pass = secrets.token_hex(4)  # Генерируем 8-значный пароль
+                random_pass = secrets.token_hex(4)  # Генерируем случайный пароль
                 new_user = User(
                     username=author_name,
                     role="seller",
@@ -286,80 +286,81 @@ def confirm_products_import(
                 )
                 session.add(new_user)
                 stats["authors_created"] += 1
-        session.commit()  # Коммитим, чтобы база выдала ID новым авторам
+        session.commit()
 
-    # Получаем словарь всех авторов { "Имя": ID }, чтобы быстро искать
+    # Получаем словарь всех авторов для быстрой привязки
     all_users = session.exec(select(User)).all()
     user_map = {u.username: u.id for u in all_users}
 
-    # Обработка измененных товаров
+    # 2. Обработка измененных товаров
     for diff in request.changed_products:
-        if diff.sku:
-            db_product = session.exec(select(Product).where(Product.sku == diff.sku)).first()
+        # Дополнительная защита: работаем только если есть уникальный ID
+        if not diff.sku:
+            continue
 
-            if db_product:
-                changes = {}
+        db_product = session.exec(select(Product).where(Product.sku == diff.sku)).first()
 
-                if db_product.base_price != diff.new_price:
-                    changes["base_price"] = {"old": db_product.base_price, "new": diff.new_price}
-                    db_product.base_price = diff.new_price
+        # Если товар реально найден в базе
+        if db_product:
+            changes = {}
 
-                if db_product.stock != diff.new_stock:
-                    changes["stock"] = {"old": db_product.stock, "new": diff.new_stock}
-                    db_product.stock = diff.new_stock
+            if db_product.base_price != diff.new_price:
+                changes["base_price"] = {"old": db_product.base_price, "new": diff.new_price}
+                db_product.base_price = diff.new_price
 
-                if db_product.name != diff.name:
-                    changes["name"] = {"old": db_product.name, "new": diff.name}
-                    db_product.name = diff.name
+            if db_product.stock != diff.new_stock:
+                changes["stock"] = {"old": db_product.stock, "new": diff.new_stock}
+                db_product.stock = diff.new_stock
 
-                # ДОБАВЛЕНО: Привязка автора (если товар был ничейным или автор поменялся)
-                # Логику "конфликта" из Задачи 6 мы добавим сюда на следующем шаге!
-                seller_id = user_map.get(diff.seller_name) if diff.seller_name else None
-                if db_product.seller_id != seller_id and seller_id is not None:
-                    changes["seller_id"] = {"old": db_product.seller_id, "new": seller_id}
-                    db_product.seller_id = seller_id
+            if db_product.name != diff.name:
+                changes["name"] = {"old": db_product.name, "new": diff.name}
+                db_product.name = diff.name
 
-                if changes:
-                    if request.comment:
-                        changes["comment"] = request.comment
+            # Привязка автора ТОЛЬКО если товар был ничейным (Задача 6)
+            seller_id = user_map.get(diff.seller_name) if diff.seller_name else None
+            if db_product.seller_id is None and seller_id is not None:
+                changes["seller_id"] = {"old": None, "new": seller_id}
+                db_product.seller_id = seller_id
 
-                    session.add(db_product)
+            if changes:
+                if request.comment:
+                    changes["comment"] = request.comment
 
-                    create_audit_log(
-                        session=session,
-                        actor=admin_username,
-                        entity_name="Product",
-                        entity_id=db_product.id,
-                        action="import_update",
-                        changes=changes
-                    )
-                stats["updated"] += 1
+                session.add(db_product)
 
-    # Обработка новых товаров
+                create_audit_log(
+                    session=session,
+                    actor=admin_username,
+                    entity_name="Product",
+                    entity_id=db_product.id,
+                    action="import_update",
+                    changes=changes
+                )
+            stats["updated"] += 1
+
+    # 3. Обработка абсолютно новых товаров
     for diff in request.new_products:
+        if not diff.sku:
+            continue
+
         seller_id = user_map.get(diff.seller_name) if diff.seller_name else None
-        if db_product.seller_id is None and seller_id is not None:
-            changes["seller_id"] = {"old": None, "new": seller_id}
-            db_product.seller_id = seller_id
 
-        if changes:
+        new_product = Product(
+            sku=diff.sku,
+            name=diff.name,
+            base_price=diff.new_price,
+            stock=diff.new_stock,
+            seller_id=seller_id
+        )
+        session.add(new_product)
+        session.commit()
+        session.refresh(new_product)
 
-            new_product = Product(
-                sku=diff.sku,
-                name=diff.name,
-                base_price=diff.new_price,
-                stock=diff.new_stock,
-                seller_id=seller_id  # ДОБАВЛЕНО: Присваиваем ID автора
-            )
-            session.add(new_product)
-            session.commit()
-            session.refresh(new_product)
-
-            changes = {
-                "status": "created",
-                "initial_stock": diff.new_stock,
-                "initial_price": diff.new_price
-            }
+        changes = {
+            "status": "created",
+            "initial_stock": diff.new_stock,
+            "initial_price": diff.new_price
+        }
         if seller_id:
             changes["seller_id"] = seller_id
 

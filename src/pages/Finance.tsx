@@ -1,17 +1,19 @@
 // src/pages/Finance.tsx
 import React, { useState, useEffect } from 'react';
-import { Wallet, ArrowUpRight, ArrowDownRight, Plus, Receipt, Filter, X } from 'lucide-react';
+import { Wallet, ArrowUpRight, ArrowDownRight, Plus, Receipt, Filter, X, AlertTriangle } from 'lucide-react';
 import apiClient from '../api/axios';
 
 interface Transaction {
   id: number;
   type: string;
+  full_amount: number;
   amount: number;
   commission_amount: number;
   date: string;
   comment: string | null;
-  seller_id: number;
+  seller_id: number | null;
   product_identifier: string | null;
+  is_manual_assigned: boolean;
 }
 
 interface Seller {
@@ -31,7 +33,7 @@ export const Finance = () => {
   const [hasMore, setHasMore] = useState(true);
 
   // Фильтры
-  const [sellerFilter, setSellerFilter] = useState('');
+  const [sellerFilter, setSellerFilter] = useState('all');
   const [typeFilter, setTypeFilter] = useState('all');
   const [sortBy, setSortBy] = useState('date_desc');
   const [startDate, setStartDate] = useState('');
@@ -39,33 +41,29 @@ export const Finance = () => {
   const [minAmount, setMinAmount] = useState('');
   const [maxAmount, setMaxAmount] = useState('');
 
-  // Состояния для модального окна Админа
+  // Массовые действия
+  const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  const [bulkAssignSellerId, setBulkAssignSellerId] = useState('');
+
+  // Модальное окно Админа
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [formData, setFormData] = useState({
-    seller_id: '',
-    type: 'payout',
-    amount: '',
-    comment: ''
-  });
+  const [formData, setFormData] = useState({ seller_id: '', type: 'payout', amount: '', comment: '' });
 
   const userRole = localStorage.getItem('userRole');
   const isAdmin = userRole === 'admin';
 
-  // Загружаем данные при изменении страницы или любых фильтров
   useEffect(() => {
+    setSelectedIds([]); // Сбрасываем выбор при смене страницы/фильтров
     fetchTransactions();
     if (isAdmin && sellers.length === 0) fetchSellers();
   }, [page, sellerFilter, typeFilter, sortBy, startDate, endDate]);
-  // Примечание: minAmount и maxAmount будем применять по кнопке или onBlur, чтобы не спамить запросы при вводе цифр
 
   const fetchTransactions = async () => {
     try {
       setIsLoading(true);
       const offset = (page - 1) * limit;
-
-      // Формируем объект параметров, отбрасывая пустые значения
       const params: any = { limit, offset, sort_by: sortBy };
-      if (sellerFilter && sellerFilter !== 'all') params.seller_id = sellerFilter;
+      if (sellerFilter && sellerFilter !== 'all') params.seller_filter = sellerFilter;
       if (typeFilter !== 'all') params.type_filter = typeFilter;
       if (startDate) params.start_date = `${startDate}T00:00:00`;
       if (endDate) params.end_date = `${endDate}T23:59:59`;
@@ -92,21 +90,13 @@ export const Finance = () => {
   };
 
   const clearFilters = () => {
-    setSellerFilter('');
-    setTypeFilter('all');
-    setSortBy('date_desc');
-    setStartDate('');
-    setEndDate('');
-    setMinAmount('');
-    setMaxAmount('');
-    setPage(1);
-    // fetchTransactions вызовется автоматически из-за изменения state в useEffect
+    setSellerFilter('all'); setTypeFilter('all'); setSortBy('date_desc');
+    setStartDate(''); setEndDate(''); setMinAmount(''); setMaxAmount(''); setPage(1);
   };
 
   const handleCreateTransaction = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.seller_id || !formData.amount) return;
-
     try {
       await apiClient.post('/transactions/', {
         seller_id: parseInt(formData.seller_id),
@@ -114,7 +104,6 @@ export const Finance = () => {
         amount: formData.type === 'correction' ? parseFloat(formData.amount) : -Math.abs(parseFloat(formData.amount)),
         comment: formData.comment
       });
-
       alert("Транзакция успешно проведена!");
       setIsModalOpen(false);
       setFormData({ seller_id: '', type: 'payout', amount: '', comment: '' });
@@ -124,11 +113,41 @@ export const Finance = () => {
     }
   };
 
+  // --- МАССОВЫЕ ДЕЙСТВИЯ (Перепривязка чеков) ---
+  const handleSelectAll = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.checked) setSelectedIds(transactions.filter(t => t.type === 'sale').map(t => t.id));
+    else setSelectedIds([]);
+  };
+
+  const handleSelectOne = (id: number, checked: boolean) => {
+    if (checked) setSelectedIds([...selectedIds, id]);
+    else setSelectedIds(selectedIds.filter(itemId => itemId !== id));
+  };
+
+  const handleBulkAssign = async () => {
+    const isUnassigned = bulkAssignSellerId === 'unassigned';
+    if (!bulkAssignSellerId && !isUnassigned) return alert("Выберите продавца для привязки");
+
+    if (!window.confirm(`Перепривязать ${selectedIds.length} транзакций? Балансы авторов будут пересчитаны автоматически.`)) return;
+
+    try {
+      await apiClient.post('/transactions/bulk-reassign', {
+        transaction_ids: selectedIds,
+        new_seller_id: isUnassigned ? null : parseInt(bulkAssignSellerId)
+      });
+      setSelectedIds([]);
+      setBulkAssignSellerId('');
+      fetchTransactions();
+    } catch (error) {
+      alert("Произошла ошибка при массовой привязке");
+    }
+  };
+
   const getTransactionTypeInfo = (type: string) => {
     switch(type) {
       case 'sale': return { label: 'Продажа', color: 'text-green-600', bg: 'bg-green-100', icon: <ArrowUpRight size={16} /> };
       case 'payout': return { label: 'Выплата', color: 'text-blue-600', bg: 'bg-blue-100', icon: <ArrowDownRight size={16} /> };
-      case 'rent': return { label: 'Аренда полки', color: 'text-orange-600', bg: 'bg-orange-100', icon: <ArrowDownRight size={16} /> };
+      case 'rent': return { label: 'Аренда', color: 'text-orange-600', bg: 'bg-orange-100', icon: <ArrowDownRight size={16} /> };
       case 'correction': return { label: 'Корректировка', color: 'text-purple-600', bg: 'bg-purple-100', icon: <Wallet size={16} /> };
       default: return { label: 'Операция', color: 'text-gray-600', bg: 'bg-gray-100', icon: <Receipt size={16} /> };
     }
@@ -141,14 +160,9 @@ export const Finance = () => {
           <h1 className="text-2xl font-bold text-gray-900">Финансовая история</h1>
           <p className="text-gray-500 mt-1">Отслеживание продаж, выплат и аренды</p>
         </div>
-
         {isAdmin && (
-          <button
-            onClick={() => setIsModalOpen(true)}
-            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-medium transition-colors shadow-sm"
-          >
-            <Plus size={18} />
-            Создать операцию
+          <button onClick={() => setIsModalOpen(true)} className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-medium transition-colors shadow-sm">
+            <Plus size={18} /> Создать операцию
           </button>
         )}
       </div>
@@ -159,27 +173,20 @@ export const Finance = () => {
           <Filter size={18} className="text-indigo-600" />
           <h3 className="font-semibold text-gray-800">Фильтры и сортировка</h3>
         </div>
-
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           {isAdmin && (
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">Продавец</label>
-              <select
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-indigo-500"
-                value={sellerFilter} onChange={(e) => { setSellerFilter(e.target.value); setPage(1); }}
-              >
-                <option value="">Все авторы</option>
+              <select className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-indigo-500" value={sellerFilter} onChange={(e) => { setSellerFilter(e.target.value); setPage(1); }}>
+                <option value="all">Все авторы</option>
+                <option value="unassigned">⚠️ Нераспределенные (Ничейные)</option>
                 {sellers.map(s => <option key={s.id} value={s.id}>{s.username}</option>)}
               </select>
             </div>
           )}
-
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">Тип операции</label>
-            <select
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-indigo-500"
-              value={typeFilter} onChange={(e) => { setTypeFilter(e.target.value); setPage(1); }}
-            >
+            <select className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-indigo-500" value={typeFilter} onChange={(e) => { setTypeFilter(e.target.value); setPage(1); }}>
               <option value="all">Все типы</option>
               <option value="sale">Только Продажи</option>
               <option value="payout">Выплаты авторам</option>
@@ -187,63 +194,41 @@ export const Finance = () => {
               <option value="correction">Корректировки</option>
             </select>
           </div>
-
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">Сортировка</label>
-            <select
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-indigo-500"
-              value={sortBy} onChange={(e) => { setSortBy(e.target.value); setPage(1); }}
-            >
+            <select className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-indigo-500" value={sortBy} onChange={(e) => { setSortBy(e.target.value); setPage(1); }}>
               <option value="date_desc">Сначала новые</option>
               <option value="date_asc">Сначала старые</option>
               <option value="amount_desc">Сначала крупные суммы</option>
               <option value="amount_asc">Сначала мелкие суммы</option>
             </select>
           </div>
-
           <div className="flex items-end">
-            <button
-              onClick={clearFilters}
-              className="flex items-center gap-1 text-sm text-gray-500 hover:text-red-600 transition-colors px-2 py-2"
-            >
+            <button onClick={clearFilters} className="flex items-center gap-1 text-sm text-gray-500 hover:text-red-600 transition-colors px-2 py-2">
               <X size={16} /> Сбросить всё
             </button>
           </div>
         </div>
+      </div>
 
-        {/* Дополнительные фильтры: Период и Сумма */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-4 border-t border-gray-100">
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-medium text-gray-600 w-16">Период:</span>
-            <input
-              type="date"
-              className="flex-1 border border-gray-300 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-indigo-500"
-              value={startDate} onChange={(e) => { setStartDate(e.target.value); setPage(1); }}
-            />
-            <span className="text-gray-400">—</span>
-            <input
-              type="date"
-              className="flex-1 border border-gray-300 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-indigo-500"
-              value={endDate} onChange={(e) => { setEndDate(e.target.value); setPage(1); }}
-            />
-          </div>
-
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-medium text-gray-600 w-16">Сумма:</span>
-            <input
-              type="number" placeholder="От (₽)"
-              className="flex-1 border border-gray-300 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-indigo-500"
-              value={minAmount} onChange={(e) => setMinAmount(e.target.value)} onBlur={() => fetchTransactions()}
-            />
-            <span className="text-gray-400">—</span>
-            <input
-              type="number" placeholder="До (₽)"
-              className="flex-1 border border-gray-300 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-indigo-500"
-              value={maxAmount} onChange={(e) => setMaxAmount(e.target.value)} onBlur={() => fetchTransactions()}
-            />
+      {/* ПАНЕЛЬ ПЕРЕПРИВЯЗКИ ЧЕКОВ */}
+      {selectedIds.length > 0 && isAdmin && (
+        <div className="bg-indigo-50 p-4 rounded-xl border border-indigo-200 flex items-center justify-between animate-in fade-in slide-in-from-top-2">
+          <span className="font-bold text-indigo-800">Выбрано продаж: {selectedIds.length}</span>
+          <div className="flex items-center gap-3">
+            <span className="text-sm text-indigo-700">Перепривязать к:</span>
+            <select
+              className="border border-indigo-200 rounded text-sm px-2 py-1 outline-none"
+              value={bulkAssignSellerId} onChange={(e) => setBulkAssignSellerId(e.target.value)}
+            >
+              <option value="" disabled>Выберите продавца...</option>
+              <option value="unassigned">Отвязать (Сделать ничейным)</option>
+              {sellers.map(s => <option key={s.id} value={s.id}>{s.username}</option>)}
+            </select>
+            <button onClick={handleBulkAssign} className="px-3 py-1 bg-indigo-600 text-white text-sm rounded hover:bg-indigo-700">Применить</button>
           </div>
         </div>
-      </div>
+      )}
 
       {/* ТАБЛИЦА ТРАНЗАКЦИЙ */}
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden relative">
@@ -258,44 +243,61 @@ export const Finance = () => {
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="bg-gray-50 border-b border-gray-100">
-                <th className="p-4 text-sm font-semibold text-gray-600">Дата и Время</th>
+                {isAdmin && (
+                  <th className="p-4 w-12">
+                    <input type="checkbox" className="rounded text-indigo-600 focus:ring-indigo-500" onChange={handleSelectAll} checked={transactions.filter(t => t.type === 'sale').length > 0 && selectedIds.length === transactions.filter(t => t.type === 'sale').length} />
+                  </th>
+                )}
+                <th className="p-4 text-sm font-semibold text-gray-600">Дата</th>
                 <th className="p-4 text-sm font-semibold text-gray-600">Тип</th>
-                <th className="p-4 text-sm font-semibold text-gray-600">Сумма</th>
+                <th className="p-4 text-sm font-semibold text-gray-600">Сумма (Доход)</th>
                 <th className="p-4 text-sm font-semibold text-gray-600">Детали</th>
-                {isAdmin && <th className="p-4 text-sm font-semibold text-gray-600">Продавец</th>}
+                {isAdmin && <th className="p-4 text-sm font-semibold text-gray-600">Владелец чека</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
               {transactions.map((txn) => {
                 const typeInfo = getTransactionTypeInfo(txn.type);
+                const isSelected = selectedIds.includes(txn.id);
                 return (
-                  <tr key={txn.id} className="hover:bg-gray-50 transition-colors">
+                  <tr key={txn.id} className={`transition-colors hover:bg-gray-50 ${isSelected ? 'bg-indigo-50/30' : ''}`}>
+                    {isAdmin && (
+                      <td className="p-4">
+                        {txn.type === 'sale' && (
+                          <input type="checkbox" className="rounded text-indigo-600 focus:ring-indigo-500" checked={isSelected} onChange={(e) => handleSelectOne(txn.id, e.target.checked)} />
+                        )}
+                      </td>
+                    )}
                     <td className="p-4 text-sm text-gray-600">
-                      {new Date(txn.date).toLocaleString('ru-RU', {
-                        day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit'
-                      })}
+                      {new Date(txn.date).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
                     </td>
                     <td className="p-4">
                       <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-bold ${typeInfo.bg} ${typeInfo.color}`}>
                         {typeInfo.icon} {typeInfo.label}
                       </span>
+                      {txn.is_manual_assigned && <span className="block text-[10px] text-gray-400 mt-1" title="Ручная корректировка автора">✍️ Перепривязано</span>}
                     </td>
-                    <td className={`p-4 text-sm font-bold ${txn.amount > 0 ? 'text-green-600' : 'text-gray-900'}`}>
-                      {txn.amount > 0 ? '+' : ''}{txn.amount.toLocaleString('ru-RU')} ₽
-                      {txn.commission_amount > 0 && (
-                        <span className="block text-[11px] font-normal text-gray-400 mt-0.5">
-                          Комиссия: {txn.commission_amount} ₽
-                        </span>
+                    <td className="p-4">
+                      <div className={`text-sm font-bold ${txn.amount > 0 ? 'text-green-600' : 'text-gray-900'}`}>
+                        {txn.amount > 0 ? '+' : ''}{txn.amount.toLocaleString('ru-RU')} ₽
+                      </div>
+                      {txn.type === 'sale' && (
+                        <div className="text-[11px] text-gray-500 mt-0.5">
+                          Полная: {txn.full_amount} ₽ | Ком: {txn.commission_amount} ₽
+                        </div>
                       )}
                     </td>
                     <td className="p-4 text-sm text-gray-700">
                       {txn.product_identifier && <span className="font-medium text-gray-900">{txn.product_identifier}</span>}
                       {txn.comment && <span className="block text-xs text-gray-500 italic mt-0.5">{txn.comment}</span>}
-                      {!txn.product_identifier && !txn.comment && <span className="text-gray-400">—</span>}
                     </td>
                     {isAdmin && (
-                      <td className="p-4 text-sm text-indigo-600 font-medium">
-                        {sellers.find(s => s.id === txn.seller_id)?.username || `ID: ${txn.seller_id}`}
+                      <td className="p-4">
+                        {txn.seller_id ? (
+                          <span className="text-sm text-indigo-600 font-medium">{sellers.find(s => s.id === txn.seller_id)?.username}</span>
+                        ) : (
+                          <span className="text-sm font-bold text-orange-600 flex items-center gap-1"><AlertTriangle size={14}/> Ничейный</span>
+                        )}
                       </td>
                     )}
                   </tr>
@@ -304,17 +306,6 @@ export const Finance = () => {
             </tbody>
           </table>
         )}
-
-        {/* ПАГИНАЦИЯ */}
-        <div className="p-4 border-t border-gray-100 flex items-center justify-between bg-white">
-          <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1} className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50">
-            ← Назад
-          </button>
-          <span className="text-sm text-gray-500">Страница {page}</span>
-          <button onClick={() => setPage(p => p + 1)} disabled={!hasMore} className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50">
-            Вперед →
-          </button>
-        </div>
       </div>
 
       {/* МОДАЛЬНОЕ ОКНО СОЗДАНИЯ ТРАНЗАКЦИИ */}

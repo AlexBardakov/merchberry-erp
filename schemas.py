@@ -42,10 +42,6 @@ class TransactionCreateRequest(BaseModel):
     amount: float
     comment: Optional[str] = None
 
-class ChartDataPoint(BaseModel):
-    label: str
-    total_amount: float
-    products: List[str]
 
 class TransactionRead(BaseModel):
     id: int
@@ -102,3 +98,69 @@ class AuditLogRead(BaseModel):
     action: str
     changes: dict
     product_name: Optional[str] = None  # Добавим название товара для удобства фронта
+
+class TransactionBulkReassignRequest(BaseModel):
+    transaction_ids: List[int]
+    new_seller_id: Optional[int] = None  # Если None, транзакция становится "ничейной"
+
+
+class UserRenameRequest(BaseModel):
+    new_username: str
+
+
+class UserDeleteConfirmRequest(BaseModel):
+    confirm_username: str
+
+
+class UserVKSettingsUpdate(BaseModel):
+    vk_id: Optional[str] = None
+    vk_notify_inventory: Optional[bool] = None
+    vk_notify_sales: Optional[bool] = None
+
+
+# Обновим UserRead, чтобы фронтенд получал данные о ВК
+class UserRead(BaseModel):
+    id: int
+    username: str
+    role: str
+    full_name: Optional[str] = None
+    phone: Optional[str] = None
+    payment_details: Optional[str] = None
+    shelf_location: Optional[str] = None
+    rent_rate: float
+    commission_percent: float
+    balance: float
+    notifications_enabled: bool
+    low_stock_threshold: int
+    vk_id: Optional[str] = None
+    vk_notify_inventory: bool
+    vk_notify_sales: bool
+    notes: Optional[str] = None
+    is_active: bool
+    created_at: datetime
+
+class TopProductRead(BaseModel):
+    rank: int
+    name: str
+    quantity: int
+
+class ChartDataPoint(BaseModel):
+    label: str
+    full_amount: float
+    profit: float
+    commission: float
+    products_info: List[str]  # Массив строк для всплывающего окна (тултипа)
+
+class DashboardSummary(BaseModel):
+    total_full_amount: float
+    total_profit: float
+    total_commission: float
+    chart_data: List[ChartDataPoint]
+    top_products: List[TopProductRead]
+
+class WidgetStats(BaseModel):
+    current_balance: float
+    products_on_shelves: int
+    sales_30_days: float
+    sales_prev_30_days: float
+    sales_trend_percent: float

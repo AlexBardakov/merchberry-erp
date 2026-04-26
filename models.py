@@ -5,6 +5,7 @@ from sqlmodel import Field, SQLModel, Relationship, Column, JSON
 
 
 # --- ТАБЛИЦА: ПОЛЬЗОВАТЕЛИ (Арендаторы и Админ) ---
+# --- ТАБЛИЦА: ПОЛЬЗОВАТЕЛИ (Арендаторы и Админ) ---
 class User(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     username: str = Field(unique=True, index=True)
@@ -23,12 +24,17 @@ class User(SQLModel, table=True):
     commission_percent: float = Field(default=15.0)
     balance: float = Field(default=0.0)
 
-    # --- НОВОЕ: Настройки уведомлений (Шаг 3) ---
+    # Настройки уведомлений внутри системы
     notifications_enabled: bool = Field(default=True)
-    low_stock_threshold: int = Field(default=3)  # При каком остатке бить тревогу
+    low_stock_threshold: int = Field(default=3)
+
+    # --- НОВОЕ: Интеграция с ВКонтакте (Задачи 3 и 4) ---
+    vk_id: Optional[str] = Field(default=None)
+    vk_notify_inventory: bool = Field(default=False)
+    vk_notify_sales: bool = Field(default=False)
 
     notes: Optional[str] = None
-    is_active: bool = Field(default=True)
+    is_active: bool = Field(default=True) # Используется как статус архивации (False = в архиве)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     products: List["Product"] = Relationship(back_populates="seller")
