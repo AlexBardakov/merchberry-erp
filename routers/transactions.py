@@ -180,92 +180,72 @@ def create_manual_transaction(
     return new_transaction
 
 
-def run_b2b_sync(session: Session, days_back: int = 3):
+def run_b2b_sync(session: Session):
     client = BusinessRuClient()
-    date_from = datetime.now(timezone.utc) - timedelta(days=days_back)
-    sales_data = client.get_recent_sales(date_from)
+
+    # 1. Проверяем, есть ли уже записи от Бизнес.Ру
+    existing_check = session.exec(
+        select(Transaction).where(Transaction.comment.ilike("%(Бизнес.Ру)%")).limit(1)
+    ).first()
+
+    all_checks = []
+    if not existing_check:
+        # Первая загрузка — тянем всё (по 250 за раз)
+        page = 1
+        while True:
+            checks = client.get_checks(limit=250, page=page)
+            if not checks: break
+            all_checks.extend(checks)
+            page += 1
+    else:
+        # Регулярная загрузка — последние 100
+        all_checks = client.get_checks(limit=100, page=1)
 
     processed_count = 0
-    skipped_count = 0
+    skipped_count = 0  # Добавили счетчик пропущенных чеков
     total_revenue = 0.0
 
-    for sale in sales_data:
+    for sale in all_checks:
         check_id = str(sale.get("id"))
 
-        # 1. ЗАЩИТА ОТ ДУБЛИКАТОВ
-        existing_tx = session.exec(
-            select(Transaction).where(Transaction.comment.ilike(f"%Чек #{check_id}%"))
-        ).first()
-
-        if existing_tx:
-            skipped_count += 1
+        # Проверка на дубликаты чека
+        if session.exec(select(Transaction).where(Transaction.comment.ilike(f"%Чек #{check_id}%"))).first():
+            skipped_count += 1  # Считаем пропущенные
             continue
 
-        # 2. ОБРАБОТКА ТОВАРОВ В ЧЕКЕ
         for item in sale.get("goods", []):
-            sku = str(item.get("sku", "")).strip()
-            name = str(item.get("name", "")).strip()
+            b2b_good_id = str(item.get("good_id", "")).strip()
             price = float(item.get("price", 0))
-            count = int(item.get("count", 1))
+            count = int(float(item.get("amount", 1)))
 
-            product = None
+            product = session.exec(select(Product).where(Product.sku == b2b_good_id)).first()
 
-            # --- УРОВЕНЬ 1: Поиск по Артикулу (SKU) ---
-            if sku and sku.lower() != "none":
-                product = session.exec(select(Product).where(Product.sku == sku)).first()
-
-            # --- УРОВЕНЬ 2: Fallback - Поиск по Наименованию ---
-            if not product and name and name.lower() != "none":
-                product = session.exec(select(Product).where(Product.name == name)).first()
-
-            # 3. ЕСЛИ ТОВАР НАЙДЕН — СПИСЫВАЕМ ОСТАТКИ И НАЧИСЛЯЕМ АВТОРУ ДЕНЬГИ
             if product:
-                # СПИСАНИЕ ОСТАТКА (Фикс проблемы из документации)
                 old_stock = product.stock
                 product.stock = max(0, product.stock - count)
                 session.add(product)
 
-                create_audit_log(
-                    session=session,
-                    actor="system_sync",
-                    entity_name="Product",
-                    entity_id=product.id,
-                    action="sync_stock_deduction",
-                    changes={
-                        "stock": {"old": old_stock, "new": product.stock},
-                        "comment": f"Списание по чеку #{check_id}"
-                    }
-                )
-
-                # НАЧИСЛЕНИЕ АВТОРУ
                 if product.seller_id:
-                    seller = session.exec(
-                        select(User).where(User.id == product.seller_id).with_for_update()
-                    ).first()
-
+                    seller = session.exec(select(User).where(User.id == product.seller_id).with_for_update()).first()
                     if seller and seller.is_active:
-                        total_item_price = price * count
-                        commission_amount = total_item_price * (seller.commission_percent / 100.0)
-                        seller_profit = total_item_price - commission_amount
+                        profit = (price * count) * (1 - seller.commission_percent / 100.0)
 
                         new_tx = Transaction(
                             type="sale",
-                            amount=seller_profit,
-                            commission_amount=commission_amount,
+                            amount=profit,
                             seller_id=seller.id,
                             product_identifier=product.name,
                             comment=f"Чек #{check_id} (Бизнес.Ру)"
                         )
-
-                        seller.balance += seller_profit
-
+                        seller.balance += profit
                         session.add(new_tx)
-                        session.add(seller)
 
                         processed_count += 1
-                        total_revenue += total_item_price
+                        total_revenue += (price * count)
 
     session.commit()
+
+    # ВОЗВРАЩАЕМ ТОЧНО ТЕ КЛЮЧИ, КОТОРЫЕ ЖДЕТ REACT (Sync.tsx)
     return {
         "message": "Синхронизация успешно завершена",
         "processed_items": processed_count,
@@ -273,13 +253,12 @@ def run_b2b_sync(session: Session, days_back: int = 3):
         "total_revenue": total_revenue
     }
 
-# --- Обновленный эндпоинт ручной синхронизации (для кнопки на фронте) ---
+
+# Эндпоинт теперь не требует параметра `days`, так как он работает автоматически
 @router.post("/sync/sales")
 def trigger_manual_sync(
-        days: int = Query(3, description="За сколько дней проверить чеки"),
         admin_data: dict = Depends(get_current_admin),
         session: Session = Depends(get_session)
 ):
-    # Просто вызываем наше ядро синхронизации
-    result = run_b2b_sync(session=session, days_back=days)
+    result = run_b2b_sync(session=session)
     return result

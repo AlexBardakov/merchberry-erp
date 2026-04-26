@@ -258,26 +258,6 @@ def confirm_products_import(
     session.commit()
     return {"message": "Импорт успешно завершен", "stats": stats}
 
-@router.get("/low-stock", response_model=List[ProductRead])
-def get_low_stock_products(
-        current_user: dict = Depends(get_current_user),
-        session: Session = Depends(get_session)
-):
-    user = session.exec(select(User).where(User.username == current_user.get("username"))).first()
-
-    # Если уведомления выключены, возвращаем пустой список
-    if not user or not user.notifications_enabled:
-        return []
-
-    # Ищем товары этого продавца, где остаток меньше или равен порогу
-    statement = select(Product).where(
-        Product.seller_id == user.id,
-        Product.stock <= user.low_stock_threshold,
-        Product.is_obsolete == False
-    )
-
-    return session.exec(statement).all()
-
 
 @router.get("/low-stock", response_model=List[ProductRead])
 def get_low_stock_products(
