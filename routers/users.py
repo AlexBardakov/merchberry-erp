@@ -1,3 +1,6 @@
+import os
+import secrets
+from dotenv import load_dotenv
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import Session, select, or_
 from typing import List, Optional
@@ -9,8 +12,10 @@ from auth import get_password_hash, get_current_admin, get_current_user
 from schemas import UserCreate, UserUpdate, PasswordUpdate, UserUpdateSettings, UserRenameRequest, UserDeleteConfirmRequest, UserVKSettingsUpdate
 from utils import create_audit_log
 
-router = APIRouter(prefix="/api/users", tags=["Users"])
+load_dotenv()
 
+router = APIRouter(prefix="/api/users", tags=["Users"])
+VK_GROUP_ID = os.getenv("VK_GROUP_ID")
 
 @router.post("/", response_model=User)
 def create_user(
@@ -266,3 +271,35 @@ def update_vk_settings(
     session.refresh(user)
 
     return user
+
+@router.get("/me/vk-link")
+def get_my_vk_link(
+        current_user: dict = Depends(get_current_user),
+        session: Session = Depends(get_session)
+):
+    user = session.exec(select(User).where(User.username == current_user.get("username"))).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+
+    # Если токена еще нет, генерируем его (8 случайных байт, безопасных для URL)
+    if not user.vk_link_token:
+        user.vk_link_token = secrets.token_urlsafe(8)
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+
+    if user.vk_id:
+        return {
+            "vk_link": None,
+            "is_bound": True,
+            "message": "Аккаунт уже привязан"
+        }
+    # Формируем прямую ссылку на диалог с ботом с передачей параметра ref
+    # vk.me - официальный сокращатель ВК для переходов в диалоги
+    vk_url = f"https://vk.me/club{VK_GROUP_ID}?ref={user.vk_link_token}"
+
+    return {
+        "vk_link": vk_url,
+        "token": user.vk_link_token,
+        "is_bound": user.vk_id is not None # Флаг, чтобы фронтенд знал, привязан ли уже аккаунт
+    }

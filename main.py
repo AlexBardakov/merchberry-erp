@@ -5,7 +5,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from sqlmodel import Session
 
 from database import create_db_and_tables, engine
-from routers import auth_router, users, products, transactions, analytics, audit
+from routers import auth_router, users, products, transactions, analytics, audit, vk_bot
 from routers.transactions import run_b2b_sync  # Импортируем нашу функцию
 
 app = FastAPI(title="Merchberry ERP API")
@@ -49,3 +49,4 @@ app.include_router(products.router)
 app.include_router(transactions.router)
 app.include_router(analytics.router)
 app.include_router(audit.router)
+app.include_router(vk_bot.router)

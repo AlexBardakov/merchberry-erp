@@ -5,7 +5,6 @@ from sqlmodel import Field, SQLModel, Relationship, Column, JSON
 
 
 # --- ТАБЛИЦА: ПОЛЬЗОВАТЕЛИ (Арендаторы и Админ) ---
-# --- ТАБЛИЦА: ПОЛЬЗОВАТЕЛИ (Арендаторы и Админ) ---
 class User(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     username: str = Field(unique=True, index=True)
@@ -30,6 +29,7 @@ class User(SQLModel, table=True):
 
     # --- НОВОЕ: Интеграция с ВКонтакте (Задачи 3 и 4) ---
     vk_id: Optional[str] = Field(default=None)
+    vk_link_token: Optional[str] = Field(default=None, unique=True, index=True)
     vk_notify_inventory: bool = Field(default=False)
     vk_notify_sales: bool = Field(default=False)
 
@@ -53,8 +53,6 @@ class Product(SQLModel, table=True):
     is_obsolete: bool = Field(default=False)
     seller: Optional[User] = Relationship(back_populates="products")
 
-
-# --- ТАБЛИЦА: ТРАНЗАКЦИИ ---
 # --- ТАБЛИЦА: ТРАНЗАКЦИИ ---
 class Transaction(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
