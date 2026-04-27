@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Cell
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer
 } from 'recharts';
 import apiClient from '../api/axios';
-import { Package, TrendingUp, Wallet, ChevronDown, ChevronUp, Calendar } from 'lucide-react';
+import { Package, TrendingUp, Wallet, ChevronDown, ChevronUp, Calendar, Download, Users } from 'lucide-react';
 
-// --- ИНТЕРФЕЙСЫ НОВОГО БЭКЕНДА ---
+// --- ИНТЕРФЕЙСЫ БЭКЕНДА ---
 interface TopProduct {
   rank: number;
   name: string;
@@ -31,27 +31,34 @@ interface DashboardSummary {
 interface WidgetStats {
   current_balance: number;
   products_on_shelves: number;
+  unique_names: number;
+  total_value: number;
   sales_30_days: number;
   sales_prev_30_days: number;
   sales_trend_percent: number;
 }
 
-// Вспомогательная функция для форматирования дат
+// Вспомогательные функции дат
 const formatDate = (date: Date) => date.toISOString().split('T')[0];
 const getPastDate = (days: number) => new Date(Date.now() - days * 24 * 60 * 60 * 1000);
 
 export const Dashboard = () => {
-  // --- СОСТОЯНИЯ ---
-  const [widgets, setWidgets] = useState<WidgetStats | null>(null);
+  const userRole = localStorage.getItem('userRole');
 
-  // Основной график
-  const [summary, setSummary] = useState<DashboardSummary | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  // --- СОСТОЯНИЯ ФИЛЬТРОВ ---
+  const [selectedSeller, setSelectedSeller] = useState<string>('all');
+  const [sellers, setSellers] = useState<any[]>([]);
   const [datePreset, setDatePreset] = useState<number | 'custom'>(30);
   const [startDate, setStartDate] = useState(formatDate(getPastDate(30)));
   const [endDate, setEndDate] = useState(formatDate(new Date()));
 
-  // Сравнение продаж (Задача 6)
+  // --- СОСТОЯНИЯ ДАННЫХ ---
+  const [widgets, setWidgets] = useState<WidgetStats | null>(null);
+  const [summary, setSummary] = useState<DashboardSummary | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isExporting, setIsExporting] = useState(false);
+
+  // --- СРАВНЕНИЕ ПРОДАЖ ---
   const [showComparison, setShowComparison] = useState(false);
   const [compSummary1, setCompSummary1] = useState<DashboardSummary | null>(null);
   const [compSummary2, setCompSummary2] = useState<DashboardSummary | null>(null);
@@ -59,14 +66,26 @@ export const Dashboard = () => {
   const [compDates2, setCompDates2] = useState({ start: formatDate(getPastDate(30)), end: formatDate(new Date()) });
   const [isCompLoading, setIsCompLoading] = useState(false);
 
-  // --- ЗАГРУЗКА ВИДЖЕТОВ И ОСНОВНОГО ГРАФИКА ---
+  // 1. Загрузка списка авторов (только для Админа)
+  useEffect(() => {
+    if (userRole === 'admin') {
+      apiClient.get('/users').then(res => setSellers(res.data)).catch(console.error);
+    }
+  }, [userRole]);
+
+  // 2. Загрузка виджетов и основного графика
   useEffect(() => {
     const fetchMainData = async () => {
       setIsLoading(true);
+
+      const sellerQuery = selectedSeller !== 'all' ? `seller_id=${selectedSeller}` : '';
+      const widgetUrl = `/analytics/widgets${sellerQuery ? '?' + sellerQuery : ''}`;
+      const summaryUrl = `/analytics/summary?start_date=${startDate}&end_date=${endDate}${sellerQuery ? '&' + sellerQuery : ''}`;
+
       try {
         const [widgetsRes, summaryRes] = await Promise.all([
-          apiClient.get('/analytics/widgets'),
-          apiClient.get(`/analytics/summary?start_date=${startDate}&end_date=${endDate}`)
+          apiClient.get(widgetUrl),
+          apiClient.get(summaryUrl)
         ]);
         setWidgets(widgetsRes.data);
         setSummary(summaryRes.data);
@@ -77,28 +96,30 @@ export const Dashboard = () => {
       }
     };
     fetchMainData();
-  }, [startDate, endDate]);
+  }, [startDate, endDate, selectedSeller]);
 
-  // --- ЗАГРУЗКА БЛОКА СРАВНЕНИЯ ---
-  const fetchComparison = async () => {
-    setIsCompLoading(true);
-    try {
-      const [res1, res2] = await Promise.all([
-        apiClient.get(`/analytics/summary?start_date=${compDates1.start}&end_date=${compDates1.end}`),
-        apiClient.get(`/analytics/summary?start_date=${compDates2.start}&end_date=${compDates2.end}`)
-      ]);
-      setCompSummary1(res1.data);
-      setCompSummary2(res2.data);
-    } catch (error) {
-      console.error("Ошибка загрузки сравнения:", error);
-    } finally {
-      setIsCompLoading(false);
-    }
-  };
-
+  // 3. Загрузка блока сравнения
   useEffect(() => {
-    if (showComparison) fetchComparison();
-  }, [showComparison, compDates1, compDates2]);
+    if (showComparison) {
+      const fetchComparison = async () => {
+        setIsCompLoading(true);
+        const sellerQuery = selectedSeller !== 'all' ? `&seller_id=${selectedSeller}` : '';
+        try {
+          const [res1, res2] = await Promise.all([
+            apiClient.get(`/analytics/summary?start_date=${compDates1.start}&end_date=${compDates1.end}${sellerQuery}`),
+            apiClient.get(`/analytics/summary?start_date=${compDates2.start}&end_date=${compDates2.end}${sellerQuery}`)
+          ]);
+          setCompSummary1(res1.data);
+          setCompSummary2(res2.data);
+        } catch (error) {
+          console.error("Ошибка загрузки сравнения:", error);
+        } finally {
+          setIsCompLoading(false);
+        }
+      };
+      fetchComparison();
+    }
+  }, [showComparison, compDates1, compDates2, selectedSeller]);
 
   // --- ОБРАБОТЧИКИ ---
   const handlePresetChange = (days: number) => {
@@ -107,7 +128,28 @@ export const Dashboard = () => {
     setEndDate(formatDate(new Date()));
   };
 
-  // --- КАСТОМНЫЙ ТУЛТИП (Задача 2) ---
+  const handleExport = async () => {
+    setIsExporting(true);
+    const sellerQuery = selectedSeller !== 'all' ? `&seller_id=${selectedSeller}` : '';
+    const exportUrl = `/analytics/export?start_date=${startDate}&end_date=${endDate}${sellerQuery}`;
+
+    try {
+      const response = await apiClient.get(exportUrl, { responseType: 'blob' });
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `analytics_${startDate}_${endDate}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      link.parentNode?.removeChild(link);
+    } catch (error) {
+      console.error("Ошибка при выгрузке:", error);
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  // --- КАСТОМНЫЙ ТУЛТИП ГРАФИКА ---
   const CustomTooltip = ({ active, payload, label }: any) => {
     if (active && payload && payload.length) {
       const data: ChartDataPoint = payload[0].payload;
@@ -133,7 +175,6 @@ export const Dashboard = () => {
     return null;
   };
 
-  // --- КОМПОНЕНТ ЛИДЕРОВ ПРОДАЖ (Задача 4) ---
   const TopProductsList = ({ products }: { products: TopProduct[] }) => (
     <div className="bg-gray-50 rounded-xl p-4 border border-gray-100">
       <h3 className="text-sm font-bold text-gray-700 mb-3 flex items-center gap-2">
@@ -156,7 +197,28 @@ export const Dashboard = () => {
 
   return (
     <div className="space-y-6">
-      {/* 1. ВИДЖЕТЫ (Задача 5) */}
+
+      {/* ФИЛЬТР АВТОРОВ ДЛЯ АДМИНА */}
+      {userRole === 'admin' && (
+        <div className="flex items-center gap-4 bg-white p-4 rounded-2xl shadow-sm border border-gray-100">
+          <Users className="text-gray-400" size={24} />
+          <div className="flex flex-col">
+            <label className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Отображаемая статистика</label>
+            <select
+              value={selectedSeller}
+              onChange={(e) => setSelectedSeller(e.target.value)}
+              className="bg-gray-50 border border-gray-200 text-gray-900 text-sm rounded-lg focus:ring-indigo-500 focus:border-indigo-500 block w-64 p-2 cursor-pointer outline-none transition-colors"
+            >
+              <option value="all">Совокупная по всем авторам</option>
+              {sellers.map(s => (
+                <option key={s.id} value={s.id}>{s.username} (Симуляция автора)</option>
+              ))}
+            </select>
+          </div>
+        </div>
+      )}
+
+      {/* 1. ВИДЖЕТЫ */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex items-center gap-4">
           <div className="p-3 bg-green-100 text-green-600 rounded-xl"><Wallet size={24} /></div>
@@ -179,11 +241,25 @@ export const Dashboard = () => {
             </div>
           </div>
         </div>
-        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex items-center gap-4">
-          <div className="p-3 bg-orange-100 text-orange-600 rounded-xl"><Package size={24} /></div>
-          <div>
-            <p className="text-sm text-gray-500 font-medium">Товаров на полках</p>
-            <p className="text-2xl font-bold text-gray-900">{widgets?.products_on_shelves || 0} шт.</p>
+
+        {/* ОБНОВЛЕННЫЙ ВИДЖЕТ "ТОВАРОВ НА ПОЛКАХ" */}
+        <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
+          <div className="flex items-center gap-4 mb-3">
+            <div className="p-3 bg-orange-100 text-orange-600 rounded-xl"><Package size={24} /></div>
+            <div>
+              <p className="text-sm text-gray-500 font-medium">Товаров на полках</p>
+              <p className="text-2xl font-bold text-gray-900">{widgets?.products_on_shelves || 0} <span className="text-sm font-normal text-gray-500">шт.</span></p>
+            </div>
+          </div>
+          <div className="flex justify-between items-center text-[11px] bg-gray-50 p-2 rounded-lg border border-gray-100">
+            <div className="text-center w-1/2 border-r border-gray-200">
+              <span className="block text-gray-400">Наименований</span>
+              <span className="font-bold text-gray-700">{widgets?.unique_names || 0}</span>
+            </div>
+            <div className="text-center w-1/2">
+              <span className="block text-gray-400">Общая стоимость</span>
+              <span className="font-bold text-indigo-600">{(widgets?.total_value || 0).toLocaleString('ru-RU')} ₽</span>
+            </div>
           </div>
         </div>
       </div>
@@ -191,24 +267,40 @@ export const Dashboard = () => {
       {/* 2. ОСНОВНОЙ ГРАФИК И АНАЛИТИКА */}
       <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
 
-        {/* Фильтры дат (Задача 1) */}
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
+        {/* Заголовок, Фильтры дат и Выгрузка */}
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4 border-b border-gray-100 pb-4">
           <h2 className="text-lg font-bold text-gray-800">Аналитика продаж</h2>
-          <div className="flex flex-wrap gap-2 items-center">
-            {[3, 7, 14, 30].map(days => (
-              <button
-                key={days}
-                onClick={() => handlePresetChange(days)}
-                className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${datePreset === days ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
-              >
-                {days} дней
-              </button>
-            ))}
-            <div className="flex items-center gap-2 ml-2 pl-2 border-l border-gray-200">
-              <input type="date" value={startDate} onChange={e => { setStartDate(e.target.value); setDatePreset('custom'); }} className="text-sm border border-gray-300 rounded-lg px-2 py-1 outline-none focus:border-indigo-500"/>
-              <span className="text-gray-400">-</span>
-              <input type="date" value={endDate} onChange={e => { setEndDate(e.target.value); setDatePreset('custom'); }} className="text-sm border border-gray-300 rounded-lg px-2 py-1 outline-none focus:border-indigo-500"/>
+
+          <div className="flex flex-wrap gap-3 items-center">
+            {/* Пресеты */}
+            <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-lg">
+              {[3, 7, 14, 30].map(days => (
+                <button
+                  key={days}
+                  onClick={() => handlePresetChange(days)}
+                  className={`px-3 py-1.5 text-sm rounded-md transition-colors ${datePreset === days ? 'bg-white text-indigo-600 shadow-sm font-medium' : 'text-gray-500 hover:text-gray-900'}`}
+                >
+                  {days} дн.
+                </button>
+              ))}
             </div>
+
+            {/* Выбор дат */}
+            <div className="flex items-center gap-2 bg-gray-50 p-1.5 rounded-lg border border-gray-200">
+              <input type="date" value={startDate} onChange={e => { setStartDate(e.target.value); setDatePreset('custom'); }} className="text-sm bg-transparent outline-none cursor-pointer"/>
+              <span className="text-gray-400">-</span>
+              <input type="date" value={endDate} onChange={e => { setEndDate(e.target.value); setDatePreset('custom'); }} className="text-sm bg-transparent outline-none cursor-pointer"/>
+            </div>
+
+            {/* КНОПКА ВЫГРУЗКИ */}
+            <button
+              onClick={handleExport}
+              disabled={isExporting}
+              className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 transition-colors disabled:bg-indigo-400"
+            >
+              <Download size={16} />
+              {isExporting ? 'Загрузка...' : 'Выгрузить CSV'}
+            </button>
           </div>
         </div>
 
@@ -231,7 +323,7 @@ export const Dashboard = () => {
                 </ResponsiveContainer>
               </div>
 
-              {/* Итоги под графиком (Задача 3) */}
+              {/* Итоги под графиком */}
               <div className="flex flex-wrap justify-around bg-indigo-50 rounded-xl p-4 border border-indigo-100">
                 <div className="text-center">
                   <p className="text-xs text-indigo-400 uppercase font-bold tracking-wider mb-1">Полная сумма</p>
@@ -257,7 +349,7 @@ export const Dashboard = () => {
         )}
       </div>
 
-      {/* 3. СРАВНЕНИЕ ПРОДАЖ (Задача 6) */}
+      {/* 3. СРАВНЕНИЕ ПРОДАЖ */}
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
         <button
           onClick={() => setShowComparison(!showComparison)}
