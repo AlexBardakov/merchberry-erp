@@ -2,8 +2,8 @@
 import React, { useState, useEffect } from 'react';
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
 import {
-  LayoutDashboard, Package, Wallet, Users, RefreshCw,
-  LogOut, User as UserIcon, X, Info, Bell
+  LayoutDashboard, Package, Wallet, Users, RefreshCw, ClipboardList,
+  LogOut, User as UserIcon, X, Info, Bell, Receipt, BarChart3, FileText
 } from 'lucide-react';
 import apiClient from '../api/axios';
 
@@ -57,6 +57,7 @@ export const Layout = () => {
   const menuItems = [
     { path: '/', label: 'Дашборд', icon: <LayoutDashboard size={20} />, roles: ['admin', 'seller'] },
     { path: '/inventory', label: 'Склад', icon: <Package size={20} />, roles: ['admin', 'seller'] },
+    { path: '/inventory-logs', label: 'Инвентаризация', icon: <ClipboardList size={20} />, roles: ['admin', 'seller'] },
     { path: '/finance', label: 'Финансы', icon: <Wallet size={20} />, roles: ['admin', 'seller'] },
     { path: '/users', label: 'Авторы', icon: <Users size={20} />, roles: ['admin'] },
     { path: '/sync', label: 'Синхронизация', icon: <RefreshCw size={20} />, roles: ['admin'] },

@@ -7,6 +7,7 @@ import { Inventory } from './pages/Inventory';
 import { Users } from './pages/Users';
 import { Finance } from './pages/Finance';
 import { Sync } from './pages/Sync';
+import { InventoryLogs } from './pages/InventoryLogs';
 
 // Красивые заглушки для будущих страниц
 const Placeholder = ({ title }: { title: string }) => (
@@ -28,6 +29,7 @@ function App() {
           <Route element={<Layout />}>
             <Route path="/" element={<Dashboard />} />
             <Route path="/inventory" element={<Inventory />} />
+            <Route path="/inventory-logs" element={<ProtectedRoute><InventoryLogs /></ProtectedRoute>} />
             <Route path="/finance" element={<Finance />} />
             
             {/* Строго защищенные маршруты (Только для admin) */}

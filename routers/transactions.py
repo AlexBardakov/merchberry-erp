@@ -8,10 +8,13 @@ from services.business_api import BusinessRuClient
 from database import get_session
 from models import Transaction, User, Product
 from auth import get_current_user, get_current_admin
-from schemas import TransactionCreateRequest, TransactionRead, TransactionBulkReassignRequest
+from schemas import TransactionCreateRequest, TransactionRead, \
+    TransactionBulkReassignRequest, TransactionUpdateRequest
 from utils import create_audit_log
 
 router = APIRouter(prefix="/api/transactions", tags=["Transactions"])
+
+SYNC_IN_PROGRESS = False
 
 class BalanceCorrectionRequest(BaseModel):
     seller_id: int
@@ -189,12 +192,10 @@ def run_b2b_sync(session: Session, force_full: bool = False):
         select(Transaction).where(Transaction.external_check_id != None).limit(1)
     ).first()
 
-    # ФЛАГ ПЕРВОЙ СИНХРОНИЗАЦИИ или ПРИНУДИТЕЛЬНОЙ ПОЛНОЙ
     is_first_sync = force_full or (existing_check is None)
 
     all_checks = []
     if is_first_sync:
-        # Первая загрузка — тянем всё (по 250 за раз)
         page = 1
         while True:
             checks = client.get_checks(limit=250, page=page)
@@ -202,7 +203,6 @@ def run_b2b_sync(session: Session, force_full: bool = False):
             all_checks.extend(checks)
             page += 1
     else:
-        # Последующие загрузки — последние 100
         all_checks = client.get_checks(limit=100, page=1)
 
     sync_conflicts = []
@@ -211,34 +211,54 @@ def run_b2b_sync(session: Session, force_full: bool = False):
     total_revenue = 0.0
 
     for sale in all_checks:
-        check_id = str(sale.get("id"))
+        check_id = str(sale.get("id", "")).strip()
+        if not check_id:
+            continue
 
         # --- ПАРСИНГ РЕАЛЬНОЙ ДАТЫ ЧЕКА ---
-        # Пример: "23.04.2026 14:35:04 MSK"
         raw_date = sale.get("date", "")
         check_date = datetime.now(timezone.utc)
         if raw_date:
             try:
-                # Убираем " MSK" и парсим строку
                 clean_date = raw_date.replace(" MSK", "").strip()
                 dt = datetime.strptime(clean_date, "%d.%m.%Y %H:%M:%S")
-                # Приводим к UTC (МСК = UTC+3)
                 check_date = dt.replace(tzinfo=timezone(timedelta(hours=3)))
             except ValueError:
                 pass
 
-        # Жесткая защита от дублирования
-        existing_txs = session.exec(select(Transaction).where(Transaction.external_check_id == check_id)).all()
-        if existing_txs:
-            skipped_count += 1
-            for tx in existing_txs:
-                if tx.is_manual_assigned:
-                    sync_conflicts.append({
-                        "check_id": check_id,
-                        "products": tx.product_identifier
-                    })
-            continue
+        # === ЖЕСТКАЯ ЗАЩИТА ОТ ДУБЛИРОВАНИЯ (Отступы исправлены) ===
+        existing_txs = session.exec(
+            select(Transaction).where(Transaction.external_check_id == check_id)
+        ).all()
 
+        if existing_txs:
+            has_manual = any(tx.is_manual_assigned for tx in existing_txs)
+
+            if has_manual:
+                skipped_count += 1
+                sync_conflicts.append({
+                    "check_id": check_id,
+                    "products": "Содержит ручные правки админа"
+                })
+                continue
+
+            if force_full:
+                # Удаляем старые записи и откатываем баланс
+                for old_tx in existing_txs:
+                    if old_tx.seller_id:
+                        seller = session.exec(
+                            select(User).where(User.id == old_tx.seller_id).with_for_update()
+                        ).first()
+                        if seller:
+                            seller.balance = round(seller.balance - old_tx.amount, 2)
+                            session.add(seller)
+                    session.delete(old_tx)
+                session.flush() # Фиксируем удаления ПЕРЕД созданием новых
+            else:
+                skipped_count += 1
+                continue
+
+        # === ОБРАБОТКА ТОВАРОВ ===
         grouped_data = {}
 
         for item in sale.get("goods", []):
@@ -246,18 +266,19 @@ def run_b2b_sync(session: Session, force_full: bool = False):
             price = float(item.get("price", 0))
             count = int(float(item.get("amount", 1)))
 
-            # Сначала ищем товар в нашей БД
             product = session.exec(select(Product).where(Product.sku == b2b_good_id)).first()
             seller_id = product.seller_id if product else None
-            # Имя берем из нашей БД, иначе из чека, иначе заглушка
-            name = product.name if product else item.get("name", "Неизвестный товар")
 
-            # ВАЖНО: Списываем остатки ТОЛЬКО если это НЕ первая/полная синхронизация
+            if product:
+                name = product.name
+            else:
+                raw_name = item.get("name", "Неизвестный товар")
+                name = f"{raw_name} [ID: {b2b_good_id}]"
+
             if product and not is_first_sync:
                 product.stock = max(0, product.stock - count)
                 session.add(product)
 
-            # Инициализируем группу автора
             if seller_id not in grouped_data:
                 grouped_data[seller_id] = {
                     "full_amount": 0.0, "profit": 0.0, "commission": 0.0, "items": []
@@ -270,35 +291,35 @@ def run_b2b_sync(session: Session, force_full: bool = False):
             if seller_id:
                 seller = session.get(User, seller_id)
                 commission_rate = seller.commission_percent if (seller and seller.is_active) else 15.0
-                profit = total_item_price * (1 - commission_rate / 100.0)
-                commission = total_item_price - profit
             else:
-                profit = total_item_price
-                commission = 0.0
+                commission_rate = 15.0
+
+            profit = total_item_price * (1 - commission_rate / 100.0)
+            commission = total_item_price - profit
 
             grouped_data[seller_id]["profit"] += profit
             grouped_data[seller_id]["commission"] += commission
 
-        # Создаем объединенные транзакции
+        # === СОЗДАНИЕ ОБЪЕДИНЕННЫХ ТРАНЗАКЦИЙ ===
         for s_id, data in grouped_data.items():
             items_str = ", ".join(data["items"])
             new_tx = Transaction(
                 type="sale",
                 full_amount=data["full_amount"],
-                amount=data["profit"],
-                commission_amount=data["commission"],
+                amount=round(data["profit"], 2),
+                commission_amount=round(data["commission"], 2),
                 seller_id=s_id,
                 product_identifier=items_str,
                 comment=f"Чек #{check_id} (Бизнес.Ру)",
                 external_check_id=check_id,
-                date=check_date  # <-- ТЕПЕРЬ СОХРАНЯЕТСЯ РЕАЛЬНАЯ ДАТА ИЗ ЧЕКА
+                date=check_date
             )
             session.add(new_tx)
 
             if s_id:
                 seller = session.exec(select(User).where(User.id == s_id).with_for_update()).first()
                 if seller and seller.is_active:
-                    seller.balance += data["profit"]
+                    seller.balance = round(seller.balance + data["profit"], 2)
                     session.add(seller)
 
             processed_count += 1
@@ -326,12 +347,22 @@ def run_b2b_sync(session: Session, force_full: bool = False):
 
 @router.post("/sync/sales")
 def trigger_manual_sync(
-        force_full: bool = Query(False),  # <-- Принимаем параметр с фронтенда
+        force_full: bool = Query(False),
         admin_data: dict = Depends(get_current_admin),
         session: Session = Depends(get_session)
 ):
-    result = run_b2b_sync(session=session, force_full=force_full)
-    return result
+    global SYNC_IN_PROGRESS
+
+    if SYNC_IN_PROGRESS:
+        raise HTTPException(status_code=423,
+                            detail="Синхронизация уже запущена. Пожалуйста, подождите завершения.")
+
+    try:
+        SYNC_IN_PROGRESS = True
+        result = run_b2b_sync(session=session, force_full=force_full)
+        return result
+    finally:
+        SYNC_IN_PROGRESS = False
 
 
 @router.post("/bulk-reassign")
@@ -404,3 +435,83 @@ def bulk_reassign_transactions(
 
     session.commit()
     return {"status": "success", "updated_count": updated_count}
+
+
+@router.patch("/{transaction_id}", response_model=TransactionRead)
+def update_transaction(
+        transaction_id: int,
+        req: TransactionUpdateRequest,
+        admin_data: dict = Depends(get_current_admin),
+        session: Session = Depends(get_session)
+):
+    tx = session.exec(select(Transaction).where(
+        Transaction.id == transaction_id).with_for_update()).first()
+    if not tx:
+        raise HTTPException(status_code=404, detail="Транзакция не найдена")
+
+    admin_username = admin_data.get("username", "admin")
+    changes = {}
+
+    # 1. Смена автора (только для типа "sale")
+    # Пересчитываем балансы, если автор реально изменился
+    if req.seller_id is not None and req.seller_id != tx.seller_id and tx.type == "sale":
+        old_seller_id = tx.seller_id
+        old_amount = tx.amount
+
+        # Откатываем баланс у старого автора
+        if old_seller_id is not None:
+            old_seller = session.exec(select(User).where(
+                User.id == old_seller_id).with_for_update()).first()
+            if old_seller:
+                old_seller.balance -= tx.amount
+                session.add(old_seller)
+
+        # Начисляем новому автору
+        new_seller = session.get(User, req.seller_id)
+        if new_seller:
+            commission_rate = new_seller.commission_percent if new_seller.is_active else 15.0
+            new_profit = tx.full_amount * (1 - commission_rate / 100.0)
+            new_comm = tx.full_amount - new_profit
+
+            new_seller.balance += new_profit
+            session.add(new_seller)
+
+            tx.amount = new_profit
+            tx.commission_amount = new_comm
+        else:
+            # Если почему-то передали пустой ID
+            tx.amount = tx.full_amount
+            tx.commission_amount = 0.0
+
+        changes["seller_id"] = {"old": tx.seller_id, "new": req.seller_id}
+        changes["amount"] = {"old": old_amount, "new": tx.amount}
+        tx.seller_id = req.seller_id
+
+    # 2. Обновление текста проданных товаров (product_identifier)
+    if req.product_identifier is not None and req.product_identifier != tx.product_identifier:
+        changes["product_identifier"] = {"old": tx.product_identifier,
+                                         "new": req.product_identifier}
+        tx.product_identifier = req.product_identifier
+
+    # 3. Обновление комментария
+    if req.comment is not None and req.comment != tx.comment:
+        changes["comment"] = {"old": tx.comment, "new": req.comment}
+        tx.comment = req.comment
+
+    if changes:
+        tx.is_manual_assigned = True
+        session.add(tx)
+
+        # Логируем изменения
+        create_audit_log(
+            session=session,
+            actor=admin_username,
+            entity_name="Transaction",
+            entity_id=tx.id,
+            action="manual_edit",
+            changes=changes
+        )
+        session.commit()
+        session.refresh(tx)
+
+    return tx

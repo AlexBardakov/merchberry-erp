@@ -42,6 +42,10 @@ class TransactionCreateRequest(BaseModel):
     amount: float
     comment: Optional[str] = None
 
+class TransactionUpdateRequest(BaseModel):
+    seller_id: Optional[int] = None
+    product_identifier: Optional[str] = None
+    comment: Optional[str] = None
 
 class TransactionRead(BaseModel):
     id: int

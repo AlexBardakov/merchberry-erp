@@ -1,6 +1,6 @@
 // src/pages/Finance.tsx
 import React, { useState, useEffect } from 'react';
-import { Wallet, ArrowUpRight, ArrowDownRight, Plus, Receipt, Filter, X, AlertTriangle } from 'lucide-react';
+import { Wallet, ArrowUpRight, ArrowDownRight, Plus, Receipt, Filter, X, AlertTriangle, Edit2 } from 'lucide-react';
 import apiClient from '../api/axios';
 
 interface Transaction {
@@ -48,6 +48,36 @@ export const Finance = () => {
   // Модальное окно Админа
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [formData, setFormData] = useState({ seller_id: '', type: 'payout', amount: '', comment: '' });
+
+  // Стейты для окна редактирования
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [editFormData, setEditFormData] = useState({ id: 0, seller_id: '', product_identifier: '', comment: '' });
+
+  const openEditModal = (txn: Transaction) => {
+    setEditFormData({
+      id: txn.id,
+      seller_id: txn.seller_id ? txn.seller_id.toString() : 'unassigned',
+      product_identifier: txn.product_identifier || '',
+      comment: txn.comment || ''
+    });
+    setIsEditModalOpen(true);
+  };
+
+  const handleUpdateTransaction = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      await apiClient.patch(`/transactions/${editFormData.id}`, {
+        seller_id: editFormData.seller_id === 'unassigned' ? null : parseInt(editFormData.seller_id),
+        product_identifier: editFormData.product_identifier,
+        comment: editFormData.comment
+      });
+      alert("Чек успешно обновлен!");
+      setIsEditModalOpen(false);
+      fetchTransactions();
+    } catch (error) {
+      alert("Ошибка при обновлении транзакции.");
+    }
+  };
 
   const userRole = localStorage.getItem('userRole');
   const isAdmin = userRole === 'admin';
@@ -292,12 +322,25 @@ export const Finance = () => {
                       {txn.comment && <span className="block text-xs text-gray-500 italic mt-0.5">{txn.comment}</span>}
                     </td>
                     {isAdmin && (
-                      <td className="p-4">
-                        {txn.seller_id ? (
-                          <span className="text-sm text-indigo-600 font-medium">{sellers.find(s => s.id === txn.seller_id)?.username}</span>
-                        ) : (
-                          <span className="text-sm font-bold text-orange-600 flex items-center gap-1"><AlertTriangle size={14}/> Ничейный</span>
-                        )}
+                      <td className="p-4 relative group">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            {txn.seller_id ? (
+                              <span className="text-sm text-indigo-600 font-medium">{sellers.find(s => s.id === txn.seller_id)?.username}</span>
+                            ) : (
+                              <span className="text-sm font-bold text-orange-600 flex items-center gap-1"><AlertTriangle size={14}/> Ничейный</span>
+                            )}
+                          </div>
+
+                          {/* Кнопка редактирования (появляется при наведении) */}
+                          <button
+                            onClick={() => openEditModal(txn)}
+                            className="p-1.5 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition-all opacity-0 group-hover:opacity-100 focus:opacity-100"
+                            title="Изменить чек"
+                          >
+                            <Edit2 size={16} />
+                          </button>
+                        </div>
                       </td>
                     )}
                   </tr>
@@ -372,6 +415,54 @@ export const Finance = () => {
               <div className="flex gap-3 pt-4 border-t border-gray-100">
                 <button type="button" onClick={() => setIsModalOpen(false)} className="flex-1 py-2 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg font-medium">Отмена</button>
                 <button type="submit" className="flex-1 py-2 text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg font-medium">Провести</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* МОДАЛЬНОЕ ОКНО РЕДАКТИРОВАНИЯ ТРАНЗАКЦИИ */}
+      {isAdmin && isEditModalOpen && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-lg shadow-xl">
+            <h2 className="text-xl font-bold text-gray-900 mb-4">Редактирование чека #{editFormData.id}</h2>
+            <form onSubmit={handleUpdateTransaction} className="space-y-4">
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Привязка к автору</label>
+                <select
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:border-indigo-500"
+                  value={editFormData.seller_id} onChange={(e) => setEditFormData({...editFormData, seller_id: e.target.value})}
+                >
+                  <option value="unassigned" className="text-orange-600 font-bold">⚠️ Ничейный (Отвязать)</option>
+                  {sellers.map(s => <option key={s.id} value={s.id}>{s.username}</option>)}
+                </select>
+                <p className="text-[11px] text-gray-500 mt-1">При изменении автора балансы будут пересчитаны автоматически.</p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Состав чека (Товары)</label>
+                <textarea
+                  rows={3}
+                  placeholder="Например: Значок (1 шт.), Кружка (2 шт.)"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:border-indigo-500 resize-none text-sm"
+                  value={editFormData.product_identifier} onChange={(e) => setEditFormData({...editFormData, product_identifier: e.target.value})}
+                />
+                <p className="text-[11px] text-gray-500 mt-1">Здесь можно переписать "Неизвестный товар" на реальные названия.</p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Комментарий</label>
+                <input
+                  type="text"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:border-indigo-500 text-sm"
+                  value={editFormData.comment} onChange={(e) => setEditFormData({...editFormData, comment: e.target.value})}
+                />
+              </div>
+
+              <div className="flex gap-3 pt-4 border-t border-gray-100">
+                <button type="button" onClick={() => setIsEditModalOpen(false)} className="flex-1 py-2 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg font-medium">Отмена</button>
+                <button type="submit" className="flex-1 py-2 text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg font-medium">Сохранить изменения</button>
               </div>
             </form>
           </div>
