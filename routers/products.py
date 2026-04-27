@@ -207,9 +207,6 @@ async def preview_products_import(
         if not name or not external_id:
             continue
 
-        if group:
-            csv_authors.add(group)
-
         try:
             price = float(price_raw.replace(" ", "").replace(",", "."))
             stock = int(float(stock_raw.replace(" ", "").replace(",", ".")))
@@ -217,21 +214,25 @@ async def preview_products_import(
             price, stock = 0.0, 0
 
         sku = external_id
+        db_product = session.exec(
+            select(Product).where(Product.sku == sku)).first()
 
-        db_product = session.exec(select(Product).where(Product.sku == sku)).first()
-
-        # ДОБАВЛЕНО: Проверка на конфликт авторов (Задача 6)
+        # ДОБАВЛЕНО: Проверка конфликтов и сбор реальных авторов из CSV
         if db_product and db_product.seller_id is not None:
-            current_author_name = user_id_to_name.get(db_product.seller_id, "Неизвестно")
+            current_author_name = user_id_to_name.get(db_product.seller_id,
+                                                      "Неизвестно")
             csv_author_name = group if group else "Без автора"
 
-            # Если авторы не совпадают и в CSV реально указан какой-то автор
             if current_author_name != csv_author_name and group:
                 conflicts.append({
                     "product_name": db_product.name,
                     "current_author": current_author_name,
                     "csv_author": csv_author_name
                 })
+        else:
+            # Если товар НОВЫЙ или НИЧЕЙНЫЙ, тогда нам реально нужен этот автор для привязки
+            if group:
+                csv_authors.add(group)
 
         diff = ProductDiff(
             sku=sku,

@@ -354,10 +354,21 @@ export const Inventory = () => {
           </div>
 
           <div className="flex gap-4">
-            <button onClick={handleConfirmImport} disabled={isImporting} className="flex-1 py-3 bg-green-600 hover:bg-green-700 text-white rounded-lg font-bold transition-colors">
-              Подтвердить и Загрузить в базу
+            <button
+              onClick={handleConfirmImport}
+              disabled={isImporting}
+              className="flex-1 py-3 bg-green-600 hover:bg-green-700 text-white rounded-lg font-bold transition-colors flex items-center justify-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed"
+            >
+              {isImporting ? (
+                <>
+                  <RefreshCw className="animate-spin" size={20} />
+                  Сохранение данных...
+                </>
+              ) : (
+                "Подтвердить и Загрузить в базу"
+              )}
             </button>
-            <button onClick={cancelImport} className="px-6 py-3 bg-gray-200 hover:bg-gray-300 text-gray-800 rounded-lg font-medium transition-colors">
+            <button onClick={cancelImport} disabled={isImporting} className="px-6 py-3 bg-gray-200 hover:bg-gray-300 text-gray-800 rounded-lg font-medium transition-colors disabled:opacity-50">
               Отмена
             </button>
           </div>
