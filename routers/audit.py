@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, Query, HTTPException
-from sqlmodel import Session, select, desc
+from sqlmodel import Session, select, desc, or_
 from typing import List, Optional
 import json
 
@@ -38,6 +38,8 @@ def get_audit_logs(
     return session.exec(statement.offset(offset).limit(limit)).all()
 
 
+# Файл: routers/audit.py (замените функцию get_inventory_logs)
+
 @router.get("/inventory")
 def get_inventory_logs(
         page: int = Query(1, ge=1),
@@ -53,11 +55,13 @@ def get_inventory_logs(
             return {"items": [], "total": 0, "page": page, "pages": 0}
 
     statement = select(AuditLog).where(
-        AuditLog.entity_name.in_(["Product", "product"])).order_by(
-        desc(AuditLog.timestamp))
+        or_(
+            AuditLog.entity_name == "Product",
+            AuditLog.entity_name == "product"
+        )
+    ).order_by(desc(AuditLog.timestamp))
     all_logs = session.exec(statement).all()
 
-    # Карта товаров и юзеров для быстрого доступа
     products = session.exec(select(Product)).all()
     product_map = {p.id: p for p in products}
 
@@ -67,7 +71,6 @@ def get_inventory_logs(
     filtered_logs = []
 
     for log in all_logs:
-        # 1. Безопасный парсинг JSON (защита от крашей старых логов)
         changes = {}
         if log.changes:
             if isinstance(log.changes, dict):
@@ -87,41 +90,51 @@ def get_inventory_logs(
             if current_product and current_product.seller_id == user.id:
                 is_relevant = True
 
-            if "seller_id" in changes and isinstance(changes["seller_id"],
-                                                     dict):
-                old_seller = changes["seller_id"].get("old")
-                new_seller = changes["seller_id"].get("new")
-                if old_seller == user.id or new_seller == user.id:
-                    is_relevant = True
+            if "seller_id" in changes:
+                # Если это изменение владельца (словарь)
+                if isinstance(changes["seller_id"], dict):
+                    old_seller = changes["seller_id"].get("old")
+                    new_seller = changes["seller_id"].get("new")
+                    if old_seller == user.id or new_seller == user.id:
+                        is_relevant = True
+                # Если это создание нового товара (число)
+                elif isinstance(changes["seller_id"], int):
+                    if changes["seller_id"] == user.id:
+                        is_relevant = True
 
         if not is_relevant:
             continue
 
-        # 2. Обработка данных для админа и продавца
+        # Обработка данных для админа и продавца
         if current_user.get("role") == "admin":
-            # Админу показываем, кому был передан товар
-            if "seller_id" in changes and isinstance(changes["seller_id"],
-                                                     dict):
-                old_id = changes["seller_id"].get("old")
-                new_id = changes["seller_id"].get("new")
-                old_name = user_map.get(old_id,
-                                        "Ничейный") if old_id else "Ничейный"
-                new_name = user_map.get(new_id,
-                                        "Ничейный") if new_id else "Ничейный"
-                changes["admin_seller_change"] = f"{old_name} ➔ {new_name}"
+            if "seller_id" in changes:
+                if isinstance(changes["seller_id"], dict):
+                    old_id = changes["seller_id"].get("old")
+                    new_id = changes["seller_id"].get("new")
+                    old_name = user_map.get(old_id, "Ничейный") if old_id else "Ничейный"
+                    new_name = user_map.get(new_id, "Ничейный") if new_id else "Ничейный"
+                    changes["admin_seller_change"] = f"{old_name} ➔ {new_name}"
+                elif isinstance(changes["seller_id"], int):
+                    new_id = changes["seller_id"]
+                    new_name = user_map.get(new_id, "Ничейный")
+                    changes["admin_seller_change"] = f"Привязан к: {new_name}"
         else:
-            # Продавцу маскируем чужие ID
-            if "seller_id" in changes and isinstance(changes["seller_id"],
-                                                     dict):
-                old_seller = changes["seller_id"].get("old")
-                new_seller = changes["seller_id"].get("new")
-                changes.pop("seller_id", None)
+            if "seller_id" in changes:
+                if isinstance(changes["seller_id"], dict):
+                    old_seller = changes["seller_id"].get("old")
+                    new_seller = changes["seller_id"].get("new")
+                    changes.pop("seller_id", None)
 
-                if new_seller == user.id:
-                    changes["account_status"] = "Товар добавлен на аккаунт"
-                elif old_seller == user.id:
-                    changes["account_status"] = "Товар исключен из аккаунта"
-                    changes = {"account_status": "Товар исключен из аккаунта"}
+                    if new_seller == user.id:
+                        changes["account_status"] = "Товар добавлен на аккаунт"
+                    elif old_seller == user.id:
+                        changes["account_status"] = "Товар исключен из аккаунта"
+                        # Очищаем остальные изменения, чтобы продавец не видел лишнего при отвязке
+                        changes = {"account_status": "Товар исключен из аккаунта"}
+                elif isinstance(changes["seller_id"], int):
+                    if changes["seller_id"] == user.id:
+                        changes["account_status"] = "Товар добавлен на аккаунт"
+                        changes.pop("seller_id", None)
 
         p_name = current_product.name if current_product else "Удаленный товар"
         p_sku = current_product.sku if current_product else "N/A"
