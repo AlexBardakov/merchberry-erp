@@ -182,16 +182,15 @@ def create_manual_transaction(
     return new_transaction
 
 
-def run_b2b_sync(session: Session):
+def run_b2b_sync(session: Session, force_full: bool = False):
     client = BusinessRuClient()
 
-    # Проверяем, есть ли уже записи от Бизнес.Ру по наличию external_check_id
     existing_check = session.exec(
         select(Transaction).where(Transaction.external_check_id != None).limit(1)
     ).first()
 
-    # ФЛАГ ПЕРВОЙ СИНХРОНИЗАЦИИ
-    is_first_sync = existing_check is None
+    # ФЛАГ ПЕРВОЙ СИНХРОНИЗАЦИИ или ПРИНУДИТЕЛЬНОЙ ПОЛНОЙ
+    is_first_sync = force_full or (existing_check is None)
 
     all_checks = []
     if is_first_sync:
@@ -214,7 +213,21 @@ def run_b2b_sync(session: Session):
     for sale in all_checks:
         check_id = str(sale.get("id"))
 
-        # Жесткая защита от дублирования + проверка конфликтов
+        # --- ПАРСИНГ РЕАЛЬНОЙ ДАТЫ ЧЕКА ---
+        # Пример: "23.04.2026 14:35:04 MSK"
+        raw_date = sale.get("date", "")
+        check_date = datetime.now(timezone.utc)
+        if raw_date:
+            try:
+                # Убираем " MSK" и парсим строку
+                clean_date = raw_date.replace(" MSK", "").strip()
+                dt = datetime.strptime(clean_date, "%d.%m.%Y %H:%M:%S")
+                # Приводим к UTC (МСК = UTC+3)
+                check_date = dt.replace(tzinfo=timezone(timedelta(hours=3)))
+            except ValueError:
+                pass
+
+        # Жесткая защита от дублирования
         existing_txs = session.exec(select(Transaction).where(Transaction.external_check_id == check_id)).all()
         if existing_txs:
             skipped_count += 1
@@ -232,12 +245,14 @@ def run_b2b_sync(session: Session):
             b2b_good_id = str(item.get("good_id", "")).strip()
             price = float(item.get("price", 0))
             count = int(float(item.get("amount", 1)))
-            name = item.get("name", "Неизвестный товар")
 
+            # Сначала ищем товар в нашей БД
             product = session.exec(select(Product).where(Product.sku == b2b_good_id)).first()
             seller_id = product.seller_id if product else None
+            # Имя берем из нашей БД, иначе из чека, иначе заглушка
+            name = product.name if product else item.get("name", "Неизвестный товар")
 
-            # ВАЖНО: Списываем остатки ТОЛЬКО если это НЕ первая синхронизация
+            # ВАЖНО: Списываем остатки ТОЛЬКО если это НЕ первая/полная синхронизация
             if product and not is_first_sync:
                 product.stock = max(0, product.stock - count)
                 session.add(product)
@@ -252,7 +267,6 @@ def run_b2b_sync(session: Session):
             grouped_data[seller_id]["full_amount"] += total_item_price
             grouped_data[seller_id]["items"].append(f"{name} ({count} шт.)")
 
-            # Расчет прибыли и комиссии
             if seller_id:
                 seller = session.get(User, seller_id)
                 commission_rate = seller.commission_percent if (seller and seller.is_active) else 15.0
@@ -276,7 +290,8 @@ def run_b2b_sync(session: Session):
                 seller_id=s_id,
                 product_identifier=items_str,
                 comment=f"Чек #{check_id} (Бизнес.Ру)",
-                external_check_id=check_id
+                external_check_id=check_id,
+                date=check_date  # <-- ТЕПЕРЬ СОХРАНЯЕТСЯ РЕАЛЬНАЯ ДАТА ИЗ ЧЕКА
             )
             session.add(new_tx)
 
@@ -294,7 +309,7 @@ def run_b2b_sync(session: Session):
     if processed_count == 0 and skipped_count == 0:
         return {
             "status": "error",
-            "message": "Новых чеков не найдено, повторений тоже нет. Убедитесь, что API ключ Бизнес.Ру действителен и есть продажи.",
+            "message": "Новых чеков не найдено, повторений тоже нет.",
             "processed_items": 0, "skipped_checks": 0, "total_revenue": 0,
             "conflicts": []
         }
@@ -309,13 +324,13 @@ def run_b2b_sync(session: Session):
     }
 
 
-# Эндпоинт теперь не требует параметра `days`, так как он работает автоматически
 @router.post("/sync/sales")
 def trigger_manual_sync(
+        force_full: bool = Query(False),  # <-- Принимаем параметр с фронтенда
         admin_data: dict = Depends(get_current_admin),
         session: Session = Depends(get_session)
 ):
-    result = run_b2b_sync(session=session)
+    result = run_b2b_sync(session=session, force_full=force_full)
     return result
 
 

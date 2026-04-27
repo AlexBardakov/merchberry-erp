@@ -21,6 +21,7 @@ export const Sync = () => {
   const [isSyncing, setIsSyncing] = useState(false);
   const [result, setResult] = useState<SyncResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [forceFull, setForceFull] = useState(false);
 
   const userRole = localStorage.getItem('userRole');
   const isAdmin = userRole === 'admin';
@@ -32,7 +33,7 @@ export const Sync = () => {
 
     try {
       // Эндпоинт теперь не требует параметров, он все делает автоматически
-      const res = await apiClient.post('/transactions/sync/sales');
+      const res = await apiClient.post(`/transactions/sync/sales?force_full=${forceFull}`);
       setResult(res.data);
     } catch (err: any) {
       setError(err.response?.data?.detail || "Произошла ошибка при обращении к серверу синхронизации.");
@@ -105,6 +106,15 @@ export const Sync = () => {
             </>
           )}
         </button>
+        <label className="flex items-center justify-center gap-2 mt-5 cursor-pointer text-sm text-gray-500 hover:text-gray-700 transition-colors w-max mx-auto">
+          <input
+            type="checkbox"
+            checked={forceFull}
+            onChange={(e) => setForceFull(e.target.checked)}
+            className="rounded text-indigo-600 focus:ring-indigo-500 cursor-pointer w-4 h-4"
+          />
+          Принудительная полная выгрузка за всё время
+        </label>
       </div>
 
       {/* Блок ошибок */}

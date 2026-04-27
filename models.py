@@ -45,7 +45,7 @@ class User(SQLModel, table=True):
 class Product(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     sku: Optional[str] = Field(default=None, unique=True, index=True)
-    name: str = Field(unique=True, index=True)
+    name: str = Field(index=True)
     base_price: float
     stock: int = Field(default=0)
 
