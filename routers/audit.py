@@ -74,12 +74,16 @@ def get_inventory_logs(
         changes = {}
         if log.changes:
             if isinstance(log.changes, dict):
-                changes = dict(log.changes)
+                import copy
+                changes = copy.deepcopy(
+                    log.changes)  # Глубокая копия защищает от мутации
             elif isinstance(log.changes, str):
                 try:
                     changes = json.loads(log.changes)
                 except:
                     pass
+        if not isinstance(changes, dict):
+            changes = {}  # Если вдруг JSON оказался списком, сбрасываем в пустой словарь
 
         is_relevant = False
         current_product = product_map.get(log.entity_id)

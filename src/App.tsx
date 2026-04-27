@@ -29,7 +29,7 @@ function App() {
           <Route element={<Layout />}>
             <Route path="/" element={<Dashboard />} />
             <Route path="/inventory" element={<Inventory />} />
-            <Route path="/inventory-logs" element={<ProtectedRoute><InventoryLogs /></ProtectedRoute>} />
+            <Route path="/inventory-logs" element={<InventoryLogs />} />
             <Route path="/finance" element={<Finance />} />
             
             {/* Строго защищенные маршруты (Только для admin) */}
