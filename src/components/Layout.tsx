@@ -3,7 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, Package, Wallet, Users, RefreshCw, ClipboardList,
-  LogOut, User as UserIcon, X, Info, Bell, Receipt, BarChart3, FileText
+  LogOut, X, Info, Bell, MessageCircle, ExternalLink, CheckCircle
 } from 'lucide-react';
 import apiClient from '../api/axios';
 
@@ -19,7 +19,11 @@ export const Layout = () => {
   const [profileData, setProfileData] = useState<any>(null);
   const [isLoadingProfile, setIsLoadingProfile] = useState(false);
 
-  // --- НОВОЕ: Состояния уведомлений ---
+  // Состояния для ВКонтакте
+  const [vkLinkData, setVkLinkData] = useState({ vk_link: '', is_bound: false });
+  const [isLoadingVk, setIsLoadingVk] = useState(false);
+
+  // Состояния уведомлений
   const [lowStockItems, setLowStockItems] = useState<any[]>([]);
   const [showNotifications, setShowNotifications] = useState(false);
 
@@ -44,13 +48,32 @@ export const Layout = () => {
   const openProfile = async () => {
     setIsProfileOpen(true);
     setIsLoadingProfile(true);
+    setIsLoadingVk(true);
     try {
+      // Грузим основные данные профиля
       const res = await apiClient.get('/users/me');
       setProfileData(res.data);
+
+      // Грузим ссылку на привязку ВК
+      const vkRes = await apiClient.get('/users/me/vk-link');
+      setVkLinkData(vkRes.data);
     } catch (error) {
       console.error("Ошибка загрузки профиля");
     } finally {
       setIsLoadingProfile(false);
+      setIsLoadingVk(false);
+    }
+  };
+
+  // Функция для переключения галочек ВК
+  const toggleVkSetting = async (field: string, value: boolean) => {
+    // Оптимистичное обновление UI
+    setProfileData({ ...profileData, [field]: value });
+    try {
+      await apiClient.patch(`/users/${profileData.id}/vk`, { [field]: value });
+    } catch (e) {
+      alert("Ошибка сохранения настроек ВКонтакте");
+      // Откат при ошибке (опционально)
     }
   };
 
@@ -65,7 +88,7 @@ export const Layout = () => {
 
   return (
     <div className="flex h-screen bg-gray-50">
-      {/* Sidebar остается прежним */}
+      {/* SIDEBAR */}
       <aside className="w-64 bg-white border-r border-gray-200 flex flex-col">
         <div className="p-6">
           <div className="flex items-center gap-3 mb-8">
@@ -95,7 +118,8 @@ export const Layout = () => {
           </nav>
         </div>
 
-        <div className="mt-auto p-6 border-t border-gray-100">
+        {/* НИЖНЯЯ ЧАСТЬ САЙДБАРА */}
+        <div className="mt-auto p-6 border-t border-gray-100 space-y-4">
           <button
             onClick={handleLogout}
             className="flex items-center gap-3 px-4 py-3 w-full rounded-xl text-sm font-medium text-red-500 hover:bg-red-50 transition-all"
@@ -106,8 +130,9 @@ export const Layout = () => {
         </div>
       </aside>
 
+      {/* ОСНОВНОЙ КОНТЕНТ */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        {/* HEADER с интегрированным колокольчиком */}
+        {/* HEADER */}
         <header className="bg-white border-b border-gray-100 px-8 py-4 flex items-center justify-between shadow-sm">
           <div className="flex items-center gap-4">
             <h2 className="text-lg font-bold text-gray-800">
@@ -171,6 +196,7 @@ export const Layout = () => {
 
             <div className="h-8 w-px bg-gray-100 mx-1"></div>
 
+            {/* ПРОФИЛЬ В ШАПКЕ */}
             <button
               onClick={openProfile}
               className="flex items-center gap-3 pl-2 pr-4 py-1.5 hover:bg-gray-50 rounded-full transition-all border border-transparent hover:border-gray-100"
@@ -186,28 +212,29 @@ export const Layout = () => {
           </div>
         </header>
 
+        {/* ВНУТРЕННИЕ СТРАНИЦЫ */}
         <main className="flex-1 overflow-x-hidden overflow-y-auto p-8">
           <Outlet />
         </main>
       </div>
 
-      {/* Модальное окно профиля остается прежним */}
+      {/* МОДАЛЬНОЕ ОКНО ПРОФИЛЯ С ИНТЕГРАЦИЕЙ ВК */}
       {isProfileOpen && (
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in-95 duration-200">
-            {/* ... содержимое профиля из твоего файла ... */}
-            <div className="p-6 flex justify-between items-center border-b border-gray-50">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in-95 duration-200 max-h-[90vh] flex flex-col">
+            <div className="p-6 flex justify-between items-center border-b border-gray-50 shrink-0">
               <h3 className="text-xl font-bold text-gray-900">Ваш профиль</h3>
               <button onClick={() => setIsProfileOpen(false)} className="p-2 hover:bg-gray-100 rounded-full transition-colors">
                 <X size={20} className="text-gray-400" />
               </button>
             </div>
 
-            <div className="p-8">
+            <div className="p-8 overflow-y-auto">
               {isLoadingProfile ? (
                 <div className="py-10 text-center text-gray-400">Загрузка данных...</div>
               ) : profileData && (
                 <>
+                  {/* БЛОК ИНФОРМАЦИИ */}
                   <div className="space-y-4">
                     <div className="bg-gray-50 rounded-xl p-4 space-y-3">
                       <div className="flex justify-between text-sm border-b border-gray-200 pb-2">
@@ -230,16 +257,15 @@ export const Layout = () => {
 
                     <div className="flex items-start gap-2 text-xs text-gray-500 bg-blue-50/50 p-3 rounded-lg border border-blue-100">
                       <Info size={16} className="text-blue-500 shrink-0 mt-0.5" />
-                      <p>Если в ваших данных есть ошибка или изменились реквизиты, пожалуйста, сообщите об этом Администратору для обновления профиля.</p>
+                      <p>Если в ваших данных есть ошибка или изменились реквизиты, пожалуйста, сообщите об этом Администратору.</p>
                     </div>
                   </div>
 
-                  {/* ЛИНИЯ-РАЗДЕЛИТЕЛЬ */}
                   <div className="h-px bg-gray-100 my-6"></div>
 
-                  {/* НОВЫЙ БЛОК НАСТРОЕК */}
-                  <div className="space-y-5">
-                    <h4 className="text-xs font-bold text-gray-400 uppercase tracking-widest">Настройки уведомлений</h4>
+                  {/* БЛОК НАСТРОЕК ВНУТРЕННИХ УВЕДОМЛЕНИЙ */}
+                  <div className="space-y-4">
+                    <h4 className="text-xs font-bold text-gray-400 uppercase tracking-widest">Настройки ERP</h4>
 
                     <div className="bg-gray-50 rounded-2xl p-4 border border-gray-100">
                       <div className="flex items-center justify-between mb-4">
@@ -262,7 +288,6 @@ export const Layout = () => {
                         </label>
                       </div>
 
-                      {/* СЛАЙДЕР (показывается только если уведомления включены) */}
                       {profileData.notifications_enabled && (
                         <div className="space-y-3 pt-3 border-t border-gray-200/50">
                           <div className="flex justify-between">
@@ -283,6 +308,73 @@ export const Layout = () => {
                       )}
                     </div>
                   </div>
+
+                  {/* БЛОК ИНТЕГРАЦИИ ВК */}
+                  <div className="mt-6 space-y-4">
+                    <h4 className="text-xs font-bold text-gray-400 uppercase tracking-widest">Интеграция</h4>
+
+                    <div className="bg-blue-50/50 rounded-2xl p-4 border border-blue-100">
+                      <div className="flex items-center gap-3 mb-4">
+                        <div className="p-2 bg-blue-100 text-blue-600 rounded-lg"><MessageCircle size={18} /></div>
+                        <h3 className="font-bold text-gray-800">Уведомления ВКонтакте</h3>
+                      </div>
+
+                      {isLoadingVk ? (
+                        <div className="text-sm text-gray-500 py-2">Загрузка данных...</div>
+                      ) : !vkLinkData.is_bound ? (
+                        <div className="space-y-3">
+                          <p className="text-sm text-blue-800">Привяжите аккаунт, чтобы получать чеки и отчеты в личные сообщения.</p>
+                          <a
+                            href={vkLinkData.vk_link}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex w-full justify-center items-center gap-2 px-4 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-bold transition-colors"
+                          >
+                            Привязать ВКонтакте <ExternalLink size={16} />
+                          </a>
+                          <p className="text-[11px] text-blue-600 text-center opacity-80 leading-tight">
+                            После перехода в диалог отправьте боту любое сообщение для подтверждения привязки.
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="space-y-4">
+                          <div className="flex items-center gap-2 text-green-700 bg-green-100/50 px-3 py-2 rounded-lg border border-green-200 w-fit">
+                            <CheckCircle size={16} />
+                            <span className="text-sm font-bold">Аккаунт успешно привязан</span>
+                          </div>
+
+                          <div className="space-y-2 pt-2">
+                            <label className="flex items-center justify-between cursor-pointer p-3 bg-white hover:bg-blue-50/50 rounded-lg border border-blue-100 transition-colors shadow-sm">
+                              <div>
+                                <div className="text-sm font-bold text-gray-800">Новые продажи</div>
+                                <div className="text-[11px] text-gray-500 mt-0.5">Моментальные чеки в ЛС</div>
+                              </div>
+                              <input
+                                type="checkbox"
+                                className="w-4 h-4 text-blue-600 rounded cursor-pointer"
+                                checked={profileData.vk_notify_sales}
+                                onChange={(e) => toggleVkSetting('vk_notify_sales', e.target.checked)}
+                              />
+                            </label>
+
+                            <label className="flex items-center justify-between cursor-pointer p-3 bg-white hover:bg-blue-50/50 rounded-lg border border-blue-100 transition-colors shadow-sm">
+                              <div>
+                                <div className="text-sm font-bold text-gray-800">Отчет по складу</div>
+                                <div className="text-[11px] text-gray-500 mt-0.5">Сводка инвентаризации раз в сутки</div>
+                              </div>
+                              <input
+                                type="checkbox"
+                                className="w-4 h-4 text-blue-600 rounded cursor-pointer"
+                                checked={profileData.vk_notify_inventory}
+                                onChange={(e) => toggleVkSetting('vk_notify_inventory', e.target.checked)}
+                              />
+                            </label>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
                 </>
               )}
             </div>

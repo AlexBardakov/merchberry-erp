@@ -11,6 +11,7 @@ from auth import get_current_user, get_current_admin
 from schemas import TransactionCreateRequest, TransactionRead, \
     TransactionBulkReassignRequest, TransactionUpdateRequest
 from utils import create_audit_log
+from routers.vk_bot import send_vk_message_sync
 
 router = APIRouter(prefix="/api/transactions", tags=["Transactions"])
 
@@ -222,7 +223,7 @@ def run_b2b_sync(session: Session, force_full: bool = False):
             try:
                 clean_date = raw_date.replace(" MSK", "").strip()
                 dt = datetime.strptime(clean_date, "%d.%m.%Y %H:%M:%S")
-                check_date = dt.replace(tzinfo=timezone(timedelta(hours=3)))
+                check_date = dt.replace(tzinfo=timezone(timedelta(hours=7)))
             except ValueError:
                 pass
 
@@ -321,6 +322,14 @@ def run_b2b_sync(session: Session, force_full: bool = False):
                 if seller and seller.is_active:
                     seller.balance = round(seller.balance + data["profit"], 2)
                     session.add(seller)
+
+                    if seller.vk_id and seller.vk_notify_sales:
+                        msg = (
+                                f"💰 Новая продажа!\n\n"
+                                f"Вам начислено: {round(data['profit'], 2)} ₽\n"
+                                f"Товары:\n• " + "\n• ".join(data["items"])
+                        )
+                        send_vk_message_sync(seller.vk_id, msg)
 
             processed_count += 1
             total_revenue += data["full_amount"]

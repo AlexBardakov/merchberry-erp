@@ -16,6 +16,21 @@ router = APIRouter(prefix="/api/vk-callback", tags=["VK Bot"])
 VK_API_TOKEN = os.getenv("VK_API_TOKEN")
 VK_CONFIRM_TOKEN = os.getenv("VK_CONFIRM_TOKEN")
 
+def send_vk_message_sync(user_id: str, text: str):
+    """Синхронная функция для вызова из других скриптов (например, transactions.py)"""
+    if not VK_API_TOKEN or not user_id:
+        return
+    try:
+        with httpx.Client() as client:
+            client.post("https://api.vk.com/method/messages.send", params={
+                "user_id": user_id,
+                "message": text,
+                "random_id": 0,
+                "access_token": VK_API_TOKEN,
+                "v": "5.131"
+            })
+    except Exception as e:
+        print(f"Ошибка отправки ВК: {e}")
 
 async def send_vk_message(user_id: int, text: str):
     url = "https://api.vk.com/method/messages.send"
@@ -54,6 +69,7 @@ async def vk_callback(request: Request,
             if user:
                 user.vk_id = user_vk_id
                 user.vk_link_token = None  # Токен больше не нужен
+                user.vk_notify_sales = True
                 session.add(user)
                 session.commit()
                 await send_vk_message(user_vk_id,

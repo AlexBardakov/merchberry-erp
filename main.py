@@ -1,8 +1,13 @@
 # Файл: main.py
+import json
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from apscheduler.schedulers.background import BackgroundScheduler
-from sqlmodel import Session
+from sqlmodel import Session, select
+from datetime import datetime, timedelta, timezone
+from models import User, AuditLog, Product
+from routers.vk_bot import send_vk_message_sync
 
 from database import create_db_and_tables, engine
 from routers import auth_router, users, products, transactions, analytics, audit, vk_bot
@@ -27,18 +32,96 @@ def scheduled_sync_job():
     with Session(engine) as session:
         try:
             # Запрашиваем данные только за последний день, чтобы не перегружать API
-            result = run_b2b_sync(session=session, days_back=1)
+            result = run_b2b_sync(session=session)
             print(f"✅ Синхронизация завершена: обработано {result['processed_items']} позиций.")
         except Exception as e:
             print(f"❌ Ошибка фоновой синхронизации: {e}")
+
+
+def scheduled_inventory_notify_job():
+    print("📦 Запуск ежедневной рассылки об изменениях склада...")
+    with Session(engine) as session:
+        try:
+            # Находим всех, у кого включены уведомления и привязан ВК
+            users_to_notify = session.exec(
+                select(User).where(User.vk_id != None,
+                                   User.vk_notify_inventory == True)
+            ).all()
+
+            if not users_to_notify:
+                return
+
+            yesterday = datetime.now(timezone.utc) - timedelta(days=1)
+
+            for user in users_to_notify:
+                # Получаем ID всех товаров пользователя
+                products = session.exec(
+                    select(Product).where(Product.seller_id == user.id)).all()
+                product_map = {p.id: p.name for p in products}
+
+                if not product_map:
+                    continue
+
+                # Ищем логи для этих товаров за последние 24 часа
+                logs = session.exec(
+                    select(AuditLog).where(
+                        AuditLog.entity_name.in_(["Product", "product"]),
+                        AuditLog.entity_id.in_(list(product_map.keys())),
+                        AuditLog.timestamp >= yesterday
+                    ).order_by(AuditLog.timestamp)
+                ).all()
+
+                if not logs:
+                    continue
+
+                # Формируем красивое сообщение
+                msg_lines = ["📦 Сводка изменений вашего склада за сутки:\n"]
+                changes_count = 0
+
+                for log in logs:
+                    p_name = product_map.get(log.entity_id,
+                                             "Неизвестный товар")
+
+                    changes = log.changes
+                    if isinstance(changes, str):
+                        try:
+                            changes = json.loads(changes)
+                        except:
+                            changes = {}
+
+                    # Фильтруем: показываем только изменения остатков
+                    if "stock" in changes and isinstance(changes["stock"],
+                                                         dict):
+                        old_s = changes["stock"].get("old", 0)
+                        new_s = changes["stock"].get("new", 0)
+                        msg_lines.append(
+                            f"• {p_name}: {old_s} шт. ➔ {new_s} шт.")
+                        changes_count += 1
+
+                    elif "initial_stock" in changes:
+                        msg_lines.append(
+                            f"• {p_name}: добавлен (Остаток: {changes['initial_stock']} шт.)")
+                        changes_count += 1
+
+                if changes_count > 0:
+                    send_vk_message_sync(user.vk_id, "\n".join(msg_lines))
+
+            print("✅ Рассылка по складу успешно завершена.")
+        except Exception as e:
+            print(f"❌ Ошибка рассылки по складу: {e}")
 
 
 @app.on_event("startup")
 def on_startup():
     create_db_and_tables()
 
-    # Настраиваем робота на запуск каждый час
+    # Синхронизация с Бизнес.Ру (каждый час)
     scheduler.add_job(scheduled_sync_job, 'interval', hours=1)
+
+    # НОВОЕ: Рассылка по складу (каждый день в 20:00)
+    scheduler.add_job(scheduled_inventory_notify_job, 'cron', hour=20,
+                      minute=0)
+
     scheduler.start()
     print("⏱️ Планировщик фоновых задач запущен!")
 

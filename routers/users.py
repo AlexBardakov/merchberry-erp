@@ -15,8 +15,9 @@ from utils import create_audit_log
 load_dotenv()
 
 router = APIRouter(prefix="/api/users", tags=["Users"])
-VK_GROUP_ID = os.getenv("VK_GROUP_ID")
 
+VK_GROUP_URL = os.getenv("VK_GROUP_URL")
+VK_GROUP_ID = os.getenv("VK_GROUP_ID")
 @router.post("/", response_model=User)
 def create_user(
         user_in: UserCreate,
@@ -295,8 +296,8 @@ def get_my_vk_link(
             "message": "Аккаунт уже привязан"
         }
     # Формируем прямую ссылку на диалог с ботом с передачей параметра ref
-    # vk.me - официальный сокращатель ВК для переходов в диалоги
-    vk_url = f"https://vk.me/club{VK_GROUP_ID}?ref={user.vk_link_token}"
+    group_address = VK_GROUP_URL if VK_GROUP_URL else f"club{VK_GROUP_ID}"
+    vk_url = f"https://vk.me/{group_address}?ref={user.vk_link_token}"
 
     return {
         "vk_link": vk_url,
