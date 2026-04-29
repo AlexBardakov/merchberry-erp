@@ -26,7 +26,7 @@ def send_vk_message_sync(user_id: str, text: str):
     try:
         with httpx.Client() as client:
             client.post("https://api.vk.com/method/messages.send", params={
-                "user_id": user_id,
+                "peer_id": user_id,
                 "message": text,
                 "random_id": random.randint(1, 2147483647),
                 # Исправлен random_id
@@ -40,7 +40,7 @@ def send_vk_message_sync(user_id: str, text: str):
 async def send_vk_message(user_id: int, text: str):
     url = "https://api.vk.com/method/messages.send"
     params = {
-        "user_id": user_id,
+        "peer_id": user_id,
         "message": text,
         "random_id": random.randint(1, 2147483647),
         "access_token": VK_API_TOKEN,
@@ -63,7 +63,13 @@ async def vk_callback(request: Request,
     if data.get("type") == "message_new":
         msg_obj = data["object"]["message"]
         user_vk_id = str(msg_obj["from_id"])
+        peer_id = msg_obj.get("peer_id")
         text = msg_obj.get("text", "").strip()
+
+        if text.lower() == "/chatid":
+            # Отправляем ответ именно в peer_id (в ту же беседу)
+            await send_vk_message(peer_id, f"ID этой беседы: {peer_id}")
+            return PlainTextResponse(content="ok")
 
         # Проверяем скрытый токен (если переход по ссылке) или текст сообщения
         ref_token = msg_obj.get("ref")
