@@ -29,7 +29,6 @@ def send_vk_message_sync(user_id: str, text: str):
                 "peer_id": user_id,
                 "message": text,
                 "random_id": random.randint(1, 2147483647),
-                # Исправлен random_id
                 "access_token": VK_API_TOKEN,
                 "v": "5.131"
             })
@@ -66,29 +65,32 @@ async def vk_callback(request: Request,
         peer_id = msg_obj.get("peer_id")
         text = msg_obj.get("text", "").strip()
 
-        if text.lower() == "/chatid":
-            # Отправляем ответ именно в peer_id (в ту же беседу)
+        # Проверяем, является ли это групповой беседой (ID > 2 млрд)
+        is_group_chat = int(peer_id) >= 2000000000
+
+        # === КОМАНДЫ ДЛЯ БЕСЕД ===
+        # Используем "in", чтобы команда сработала даже при упоминании бота (например: "@bot /chatid")
+        if "/chatid" in text.lower():
             await send_vk_message(peer_id, f"ID этой беседы: {peer_id}")
             return PlainTextResponse(content="ok")
 
-        # Проверяем скрытый токен (если переход по ссылке) или текст сообщения
-        ref_token = msg_obj.get("ref")
-        search_token = ref_token if ref_token else text
+        # === ПРИВЯЗКА АККАУНТА (Только для личных сообщений) ===
+        # Если это беседа, мы просто игнорируем текст и не дергаем базу данных
+        if not is_group_chat:
+            ref_token = msg_obj.get("ref")
+            search_token = ref_token if ref_token else text
 
-        if search_token:
-            user = session.exec(
-                select(User).where(User.vk_link_token == search_token)).first()
-            if user:
-                user.vk_id = user_vk_id
-                user.vk_link_token = None
-                user.vk_notify_sales = True
-                session.add(user)
-                session.commit()
-                await send_vk_message(user_vk_id,
-                                      f"✅ Аккаунт {user.username} успешно привязан!")
-
-                # ИСПРАВЛЕНА ОШИБКА: Возвращаем сырой текст без кавычек
-                return PlainTextResponse(content="ok")
-
+            if search_token:
+                user = session.exec(
+                    select(User).where(User.vk_link_token == search_token)).first()
+                if user:
+                    user.vk_id = user_vk_id
+                    user.vk_link_token = None
+                    user.vk_notify_sales = True
+                    session.add(user)
+                    session.commit()
+                    await send_vk_message(user_vk_id,
+                                          f"✅ Аккаунт {user.username} успешно привязан!")
+                    return PlainTextResponse(content="ok")
 
     return PlainTextResponse(content="ok")

@@ -144,6 +144,7 @@ def process_payout_request(
                                 detail="Недостаточно средств на балансе автора (баланс изменился)")
 
         payout.status = "approved"
+        payout.admin_comment = action_data.admin_comment
         seller.balance -= payout.amount
         session.add(seller)
 

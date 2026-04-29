@@ -17,7 +17,6 @@ interface PayoutRequest {
   created_at: string;
   updated_at: string;
 
-  // Поля от бэкенда для админа
   seller_username?: string;
   seller_full_name?: string;
   seller_balance?: number;
@@ -35,12 +34,16 @@ export const Payouts = () => {
 
   // Модальные окна
   const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [isApproveOpen, setIsApproveOpen] = useState(false);
   const [isRejectOpen, setIsRejectOpen] = useState(false);
   const [isUploadOpen, setIsUploadOpen] = useState(false);
+
+  const [isDragActive, setIsDragActive] = useState(false);
 
   // Данные форм
   const [createData, setCreateData] = useState({ amount: 0, comment: '' });
   const [selectedRequest, setSelectedRequest] = useState<PayoutRequest | null>(null);
+  const [approveComment, setApproveComment] = useState('');
   const [rejectReason, setRejectReason] = useState('');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
 
@@ -48,10 +51,19 @@ export const Payouts = () => {
     fetchData();
   }, [userRole]);
 
+  useEffect(() => {
+    const handlePaste = (e: any) => {
+      if (isUploadOpen && e.clipboardData && e.clipboardData.files.length > 0) {
+        setSelectedFile(e.clipboardData.files[0]);
+      }
+    };
+    window.addEventListener('paste', handlePaste);
+    return () => window.removeEventListener('paste', handlePaste);
+  }, [isUploadOpen]);
+
   const fetchData = async () => {
     setIsLoading(true);
     try {
-      // Если это автор, загрузим его текущий баланс для отображения
       if (userRole === 'seller') {
         const userRes = await apiClient.get('/users/me');
         setCurrentBalance(userRes.data.balance);
@@ -67,7 +79,7 @@ export const Payouts = () => {
     }
   };
 
-  // --- ДЕЙСТВИЯ АВТОРА ---
+  // --- ДЕЙСТВИЯ ---
   const handleCreateRequest = async (e: React.FormEvent) => {
     e.preventDefault();
     if (createData.amount <= 0) return alert("Сумма должна быть больше нуля");
@@ -79,7 +91,6 @@ export const Payouts = () => {
       setIsCreateOpen(false);
       setCreateData({ amount: 0, comment: '' });
       await fetchData();
-      alert("Запрос на выплату успешно создан!");
     } catch (error: any) {
       alert(error.response?.data?.detail || "Ошибка при создании запроса");
     } finally {
@@ -87,12 +98,17 @@ export const Payouts = () => {
     }
   };
 
-  // --- ДЕЙСТВИЯ АДМИНА ---
-  const handleApprove = async (req: PayoutRequest) => {
-    if (!window.confirm(`Вы уверены, что хотите подтвердить выплату ${req.amount} ₽ для ${req.seller_username}? Баланс продавца будет уменьшен.`)) return;
+  const handleApprove = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedRequest) return;
     try {
       setIsSaving(true);
-      await apiClient.post(`/payouts/${req.id}/process`, { action: 'approve' });
+      await apiClient.post(`/payouts/${selectedRequest.id}/process`, {
+        action: 'approve',
+        admin_comment: approveComment
+      });
+      setIsApproveOpen(false);
+      setApproveComment('');
       await fetchData();
     } catch (error: any) {
       alert(error.response?.data?.detail || "Ошибка подтверждения");
@@ -135,12 +151,18 @@ export const Payouts = () => {
       setIsUploadOpen(false);
       setSelectedFile(null);
       await fetchData();
-      alert("Чек успешно прикреплен!");
     } catch (error: any) {
       alert(error.response?.data?.detail || "Ошибка загрузки файла");
     } finally {
       setIsSaving(false);
     }
+  };
+
+  // --- УТИЛИТЫ ---
+  const openApproveModal = (req: PayoutRequest) => {
+    setSelectedRequest(req);
+    setApproveComment('');
+    setIsApproveOpen(true);
   };
 
   const openRejectModal = (req: PayoutRequest) => {
@@ -152,10 +174,15 @@ export const Payouts = () => {
   const openUploadModal = (req: PayoutRequest) => {
     setSelectedRequest(req);
     setSelectedFile(null);
+    setIsDragActive(false);
     setIsUploadOpen(true);
   };
 
-  // Фильтрация для админа
+  const getFileUrl = (url: string | null) => {
+    if (!url) return '#';
+    return url.startsWith('/api') ? url : `/api${url}`;
+  };
+
   const filteredRequests = requests.filter(r =>
     userRole === 'admin'
       ? r.seller_username?.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -182,7 +209,6 @@ export const Payouts = () => {
           <p className="text-gray-500 mt-1">Управление выводом средств и чеками</p>
         </div>
 
-        {/* Кнопка запроса для автора */}
         {userRole === 'seller' && (
           <div className="flex items-center gap-4">
             <div className="text-right">
@@ -277,8 +303,8 @@ export const Payouts = () => {
                       </div>
                     )}
                     {req.admin_comment && (
-                      <div className="mt-1 text-sm text-red-600 bg-red-50 p-1.5 rounded">
-                        <span className="font-bold">Отказ:</span> {req.admin_comment}
+                      <div className="mt-1 text-sm text-blue-600 bg-blue-50 p-1.5 rounded">
+                        <span className="font-bold">Админ:</span> {req.admin_comment}
                       </div>
                     )}
                   </td>
@@ -291,7 +317,7 @@ export const Payouts = () => {
                     <div className="flex justify-end items-center gap-2">
                       {req.proof_file_url && (
                         <a
-                          href={`${apiClient.defaults.baseURL}${req.proof_file_url}`}
+                          href={getFileUrl(req.proof_file_url)}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-sm font-medium transition-colors"
@@ -310,7 +336,7 @@ export const Payouts = () => {
 
                           {req.status === 'pending' && (
                             <>
-                              <button onClick={() => handleApprove(req)} className="p-1.5 text-green-600 hover:bg-green-100 rounded transition-colors" title="Подтвердить выплату">
+                              <button onClick={() => openApproveModal(req)} className="p-1.5 text-green-600 hover:bg-green-100 rounded transition-colors" title="Подтвердить выплату">
                                 <CheckCircle size={20} />
                               </button>
                               <button onClick={() => openRejectModal(req)} className="p-1.5 text-red-500 hover:bg-red-100 rounded transition-colors" title="Отклонить">
@@ -365,6 +391,37 @@ export const Payouts = () => {
         </div>
       )}
 
+      {/* МОДАЛКА: ПОДТВЕРДИТЬ ВЫПЛАТУ (С КОММЕНТАРИЕМ) (АДМИН) */}
+      {isApproveOpen && selectedRequest && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-xl">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="p-3 bg-green-100 text-green-600 rounded-full"><CheckCircle size={24} /></div>
+              <div>
+                <h2 className="text-lg font-bold text-gray-900">Подтвердить выплату</h2>
+                <p className="text-sm text-gray-500">{selectedRequest.seller_username} • {selectedRequest.amount} ₽</p>
+              </div>
+            </div>
+            <form onSubmit={handleApprove} className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Комментарий к выплате (опционально)</label>
+                <textarea
+                  rows={3} placeholder="Например: Переведено по номеру карты..."
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:border-green-500 resize-none"
+                  value={approveComment} onChange={(e) => setApproveComment(e.target.value)}
+                />
+              </div>
+              <div className="flex gap-3 pt-4 border-t border-gray-100">
+                <button type="button" disabled={isSaving} onClick={() => setIsApproveOpen(false)} className="flex-1 py-2 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg font-medium disabled:opacity-50">Отмена</button>
+                <button type="submit" disabled={isSaving} className="flex-1 py-2 text-white bg-green-600 hover:bg-green-700 rounded-lg font-medium flex items-center justify-center gap-2 disabled:bg-green-400">
+                  {isSaving ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>Обработка...</> : 'Подтвердить выплату'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* МОДАЛКА: ОТКЛОНЕНИЕ ЗАПРОСА (АДМИН) */}
       {isRejectOpen && selectedRequest && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
@@ -396,7 +453,7 @@ export const Payouts = () => {
         </div>
       )}
 
-      {/* МОДАЛКА: ЗАГРУЗКА ЧЕКА (АДМИН) */}
+      {/* МОДАЛКА: ЗАГРУЗКА ЧЕКА С DRAG & DROP (АДМИН) */}
       {isUploadOpen && selectedRequest && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-xl">
@@ -405,11 +462,29 @@ export const Payouts = () => {
 
             <form onSubmit={handleUploadProof} className="space-y-4">
               <div className="flex items-center justify-center w-full">
-                <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-gray-300 border-dashed rounded-xl cursor-pointer bg-gray-50 hover:bg-gray-100 transition-colors">
-                  <div className="flex flex-col items-center justify-center pt-5 pb-6">
-                    <FileText className="w-8 h-8 mb-2 text-gray-400" />
-                    <p className="text-sm text-gray-500 font-medium">
-                      {selectedFile ? selectedFile.name : "Нажмите для выбора файла"}
+                <label
+                  className={`flex flex-col items-center justify-center w-full h-36 border-2 border-dashed rounded-xl cursor-pointer transition-all ${
+                    isDragActive
+                      ? 'border-indigo-500 bg-indigo-50'
+                      : 'border-gray-300 bg-gray-50 hover:bg-gray-100'
+                  }`}
+                  onDragOver={(e) => { e.preventDefault(); setIsDragActive(true); }}
+                  onDragLeave={(e) => { e.preventDefault(); setIsDragActive(false); }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setIsDragActive(false);
+                    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                      setSelectedFile(e.dataTransfer.files[0]);
+                    }
+                  }}
+                >
+                  <div className="flex flex-col items-center justify-center pt-5 pb-6 pointer-events-none">
+                    <FileText className={`w-10 h-10 mb-3 transition-colors ${isDragActive ? 'text-indigo-500' : 'text-gray-400'}`} />
+                    <p className="text-sm text-gray-500 font-medium text-center px-4 leading-relaxed">
+                      {selectedFile
+                        ? <span className="text-indigo-600 font-bold">{selectedFile.name}</span>
+                        : "Нажмите, перетащите файл сюда или вставьте из буфера (Ctrl+V)"
+                      }
                     </p>
                   </div>
                   <input type="file" className="hidden" accept="image/*,.pdf" onChange={(e) => setSelectedFile(e.target.files?.[0] || null)} />

@@ -19,7 +19,7 @@ from routers.transactions import run_b2b_sync  # Импортируем нашу
 app = FastAPI(title="Merchberry ERP API")
 
 os.makedirs("uploads/payouts", exist_ok=True)
-app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+app.mount("/api/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 app.add_middleware(
     CORSMiddleware,
