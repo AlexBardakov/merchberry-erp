@@ -9,6 +9,7 @@ import { Finance } from './pages/Finance';
 import { Sync } from './pages/Sync';
 import { InventoryLogs } from './pages/InventoryLogs';
 import { Payouts } from './pages/Payouts';
+import { Profile } from './pages/Profile';
 
 // Красивые заглушки для будущих страниц
 const Placeholder = ({ title }: { title: string }) => (
@@ -33,7 +34,8 @@ function App() {
             <Route path="/inventory-logs" element={<InventoryLogs />} />
             <Route path="/finance" element={<Finance />} />
             <Route path="/payouts" element={<Payouts />} />
-            
+            <Route path="/profile" element={<Profile />} />
+
             {/* Строго защищенные маршруты (Только для admin) */}
             <Route element={<ProtectedRoute allowedRole="admin" />}>
               <Route path="/users" element={<Users />} />

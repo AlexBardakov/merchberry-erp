@@ -3,7 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, Package, Wallet, Users, RefreshCw, ClipboardList,
-  LogOut, X, Info, Bell, MessageCircle, ExternalLink, CheckCircle, CreditCard
+  LogOut, X, Info, Bell, MessageCircle, ExternalLink, CheckCircle, CreditCard, User
 } from 'lucide-react';
 import apiClient from '../api/axios';
 
@@ -14,19 +14,6 @@ export const Layout = () => {
   const userRole = localStorage.getItem('userRole');
   const username = localStorage.getItem('username') || 'Пользователь';
 
-  // Состояния профиля
-  const [isProfileOpen, setIsProfileOpen] = useState(false);
-  const [profileData, setProfileData] = useState<any>(null);
-  const [isLoadingProfile, setIsLoadingProfile] = useState(false);
-
-  // Состояния для ВКонтакте
-  const [vkLinkData, setVkLinkData] = useState({ vk_link: '', is_bound: false });
-  const [isLoadingVk, setIsLoadingVk] = useState(false);
-
-  // Состояния уведомлений
-  const [lowStockItems, setLowStockItems] = useState<any[]>([]);
-  const [showNotifications, setShowNotifications] = useState(false);
-
   // ДОБАВЛЕНО: Состояние для индикатора ожидающих выплат
   const [pendingPayoutsCount, setPendingPayoutsCount] = useState(0);
 
@@ -34,11 +21,7 @@ export const Layout = () => {
   useEffect(() => {
     const fetchNotifications = async () => {
       try {
-        // 1. Уведомления об остатках
-        const res = await apiClient.get('/products/low-stock');
-        setLowStockItems(res.data);
-
-        // 2. Уведомления об ожидающих выплатах (Админ видит все, Автор - свои)
+        // Уведомления об ожидающих выплатах (Админ видит все, Автор - свои)
         if (userRole) {
           const payoutsEndpoint = userRole === 'admin' ? '/payouts/all' : '/payouts/me';
           const payoutsRes = await apiClient.get(payoutsEndpoint);
@@ -55,38 +38,6 @@ export const Layout = () => {
   const handleLogout = () => {
     localStorage.clear();
     navigate('/login');
-  };
-
-  const openProfile = async () => {
-    setIsProfileOpen(true);
-    setIsLoadingProfile(true);
-    setIsLoadingVk(true);
-    try {
-      // Грузим основные данные профиля
-      const res = await apiClient.get('/users/me');
-      setProfileData(res.data);
-
-      // Грузим ссылку на привязку ВК
-      const vkRes = await apiClient.get('/users/me/vk-link');
-      setVkLinkData(vkRes.data);
-    } catch (error) {
-      console.error("Ошибка загрузки профиля");
-    } finally {
-      setIsLoadingProfile(false);
-      setIsLoadingVk(false);
-    }
-  };
-
-  // Функция для переключения галочек ВК
-  const toggleVkSetting = async (field: string, value: boolean) => {
-    // Оптимистичное обновление UI
-    setProfileData({ ...profileData, [field]: value });
-    try {
-      await apiClient.patch(`/users/${profileData.id}/vk`, { [field]: value });
-    } catch (e) {
-      alert("Ошибка сохранения настроек ВКонтакте");
-      // Откат при ошибке (опционально)
-    }
   };
 
   const menuItems = [
@@ -127,7 +78,7 @@ export const Layout = () => {
                     {item.icon}
                     {item.label}
                   </div>
-                  {/* ДОБАВЛЕНО: Индикатор выплат */}
+                  {/* Индикатор выплат */}
                   {item.path === '/payouts' && pendingPayoutsCount > 0 && (
                     <span className="bg-red-500 text-white text-[10px] px-2 py-0.5 rounded-full font-bold">
                       {pendingPayoutsCount}
@@ -136,6 +87,19 @@ export const Layout = () => {
                 </Link>
               )
             ))}
+
+            {/* КНОПКА ПРОФИЛЯ (Вынесена за пределы map!) */}
+            <Link
+              to="/profile"
+              className={`flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all mt-2 border-t border-gray-100 ${
+                location.pathname === '/profile'
+                  ? 'bg-indigo-50 text-indigo-600'
+                  : 'text-gray-500 hover:bg-gray-50 hover:text-gray-900'
+              }`}
+            >
+              <User size={20} />
+              <span className="font-medium">Мой профиль</span>
+            </Link>
           </nav>
         </div>
 
@@ -160,77 +124,6 @@ export const Layout = () => {
               {menuItems.find(i => i.path === location.pathname)?.label || 'Система'}
             </h2>
           </div>
-
-          <div className="flex items-center gap-3">
-            {/* БЛОК УВЕДОМЛЕНИЙ */}
-            <div className="relative">
-              <button
-                onClick={() => setShowNotifications(!showNotifications)}
-                className={`p-2 rounded-full transition-all relative ${
-                  showNotifications ? 'bg-indigo-50 text-indigo-600' : 'text-gray-400 hover:bg-gray-100'
-                }`}
-              >
-                <Bell size={22} />
-                {lowStockItems.length > 0 && (
-                  <span className="absolute top-1.5 right-1.5 w-4 h-4 bg-red-500 text-white text-[10px] font-bold rounded-full border-2 border-white flex items-center justify-center">
-                    {lowStockItems.length}
-                  </span>
-                )}
-              </button>
-
-              {showNotifications && (
-                <>
-                  <div className="fixed inset-0 z-10" onClick={() => setShowNotifications(false)}></div>
-                  <div className="absolute right-0 mt-3 w-80 bg-white rounded-2xl shadow-xl border border-gray-100 overflow-hidden z-20 animate-in fade-in zoom-in-95 duration-200">
-                    <div className="p-4 border-b border-gray-50 bg-gray-50/50 flex justify-between items-center">
-                      <h3 className="text-sm font-bold text-gray-800">Заканчивается на полке</h3>
-                      <span className="text-[10px] uppercase tracking-wider text-gray-400 font-bold">Остатки</span>
-                    </div>
-                    <div className="max-h-80 overflow-y-auto">
-                      {lowStockItems.length > 0 ? (
-                        <ul className="divide-y divide-gray-50">
-                          {lowStockItems.map(item => (
-                            <li key={item.id} className="p-4 hover:bg-gray-50 transition-colors flex justify-between items-center">
-                              <div className="flex flex-col">
-                                <span className="text-sm font-medium text-gray-700 truncate max-w-[180px]">{item.name}</span>
-                                <span className="text-[10px] text-gray-400">SKU: {item.sku || '—'}</span>
-                              </div>
-                              <span className="px-2.5 py-1 bg-red-100 text-red-600 text-xs font-bold rounded-lg">
-                                {item.stock} шт.
-                              </span>
-                            </li>
-                          ))}
-                        </ul>
-                      ) : (
-                        <div className="p-8 text-center">
-                          <div className="w-12 h-12 bg-green-50 text-green-500 rounded-full flex items-center justify-center mx-auto mb-3">
-                            <Package size={20} />
-                          </div>
-                          <p className="text-sm text-gray-500">Все товары в наличии!</p>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </>
-              )}
-            </div>
-
-            <div className="h-8 w-px bg-gray-100 mx-1"></div>
-
-            {/* ПРОФИЛЬ В ШАПКЕ */}
-            <button
-              onClick={openProfile}
-              className="flex items-center gap-3 pl-2 pr-4 py-1.5 hover:bg-gray-50 rounded-full transition-all border border-transparent hover:border-gray-100"
-            >
-              <div className="w-8 h-8 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center font-bold text-sm shrink-0">
-                {username[0].toUpperCase()}
-              </div>
-              <div className="text-left hidden sm:block">
-                <p className="text-xs font-bold text-gray-900 leading-tight">{username}</p>
-                <p className="text-[10px] text-gray-400 font-medium uppercase tracking-tighter">{userRole === 'admin' ? 'Администратор' : 'Автор'}</p>
-              </div>
-            </button>
-          </div>
         </header>
 
         {/* ВНУТРЕННИЕ СТРАНИЦЫ */}
@@ -238,170 +131,6 @@ export const Layout = () => {
           <Outlet />
         </main>
       </div>
-
-      {/* МОДАЛЬНОЕ ОКНО ПРОФИЛЯ С ИНТЕГРАЦИЕЙ ВК */}
-      {isProfileOpen && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in-95 duration-200 max-h-[90vh] flex flex-col">
-            <div className="p-6 flex justify-between items-center border-b border-gray-50 shrink-0">
-              <h3 className="text-xl font-bold text-gray-900">Ваш профиль</h3>
-              <button onClick={() => setIsProfileOpen(false)} className="p-2 hover:bg-gray-100 rounded-full transition-colors">
-                <X size={20} className="text-gray-400" />
-              </button>
-            </div>
-
-            <div className="p-8 overflow-y-auto">
-              {isLoadingProfile ? (
-                <div className="py-10 text-center text-gray-400">Загрузка данных...</div>
-              ) : profileData && (
-                <>
-                  {/* БЛОК ИНФОРМАЦИИ */}
-                  <div className="space-y-4">
-                    <div className="bg-gray-50 rounded-xl p-4 space-y-3">
-                      <div className="flex justify-between text-sm border-b border-gray-200 pb-2">
-                        <span className="text-gray-500">ФИО / Реквизиты:</span>
-                        <span className="font-medium text-gray-900 text-right">{profileData.full_name || 'Не указано'}</span>
-                      </div>
-                      <div className="flex justify-between text-sm border-b border-gray-200 pb-2">
-                        <span className="text-gray-500">Телефон:</span>
-                        <span className="font-medium text-gray-900">{profileData.phone || 'Не указано'}</span>
-                      </div>
-                      <div className="flex justify-between text-sm border-b border-gray-200 pb-2">
-                        <span className="text-gray-500">Комиссия точки:</span>
-                        <span className="font-bold text-indigo-600">{profileData.commission_percent}%</span>
-                      </div>
-                      <div className="flex justify-between text-sm pt-1">
-                        <span className="text-gray-500">Текущий баланс:</span>
-                        <span className="font-bold text-green-600 text-base">{profileData.balance.toLocaleString('ru-RU')} ₽</span>
-                      </div>
-                    </div>
-
-                    <div className="flex items-start gap-2 text-xs text-gray-500 bg-blue-50/50 p-3 rounded-lg border border-blue-100">
-                      <Info size={16} className="text-blue-500 shrink-0 mt-0.5" />
-                      <p>Если в ваших данных есть ошибка или изменились реквизиты, пожалуйста, сообщите об этом Администратору.</p>
-                    </div>
-                  </div>
-
-                  <div className="h-px bg-gray-100 my-6"></div>
-
-                  {/* БЛОК НАСТРОЕК ВНУТРЕННИХ УВЕДОМЛЕНИЙ */}
-                  <div className="space-y-4">
-                    <h4 className="text-xs font-bold text-gray-400 uppercase tracking-widest">Настройки ERP</h4>
-
-                    <div className="bg-gray-50 rounded-2xl p-4 border border-gray-100">
-                      <div className="flex items-center justify-between mb-4">
-                        <div className="flex flex-col">
-                          <span className="text-sm font-bold text-gray-800">Умные уведомления</span>
-                          <span className="text-[10px] text-gray-500">Сообщать о низком остатке</span>
-                        </div>
-                        <label className="relative inline-flex items-center cursor-pointer">
-                          <input
-                            type="checkbox"
-                            className="sr-only peer"
-                            checked={profileData.notifications_enabled}
-                            onChange={async (e) => {
-                              const val = e.target.checked;
-                              setProfileData({...profileData, notifications_enabled: val});
-                              await apiClient.patch('/users/me/settings', { notifications_enabled: val });
-                            }}
-                          />
-                          <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
-                        </label>
-                      </div>
-
-                      {profileData.notifications_enabled && (
-                        <div className="space-y-3 pt-3 border-t border-gray-200/50">
-                          <div className="flex justify-between">
-                            <span className="text-[11px] font-medium text-gray-600">Порог срабатывания:</span>
-                            <span className="text-xs font-bold text-indigo-600">{profileData.low_stock_threshold} шт.</span>
-                          </div>
-                          <input
-                            type="range"
-                            min="0" max="20"
-                            value={profileData.low_stock_threshold}
-                            className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
-                            onChange={(e) => setProfileData({...profileData, low_stock_threshold: parseInt(e.target.value)})}
-                            onMouseUp={async (e: any) => {
-                              await apiClient.patch('/users/me/settings', { low_stock_threshold: parseInt(e.target.value) });
-                            }}
-                          />
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* БЛОК ИНТЕГРАЦИИ ВК */}
-                  <div className="mt-6 space-y-4">
-                    <h4 className="text-xs font-bold text-gray-400 uppercase tracking-widest">Интеграция</h4>
-
-                    <div className="bg-blue-50/50 rounded-2xl p-4 border border-blue-100">
-                      <div className="flex items-center gap-3 mb-4">
-                        <div className="p-2 bg-blue-100 text-blue-600 rounded-lg"><MessageCircle size={18} /></div>
-                        <h3 className="font-bold text-gray-800">Уведомления ВКонтакте</h3>
-                      </div>
-
-                      {isLoadingVk ? (
-                        <div className="text-sm text-gray-500 py-2">Загрузка данных...</div>
-                      ) : !vkLinkData.is_bound ? (
-                        <div className="space-y-3">
-                          <p className="text-sm text-blue-800">Привяжите аккаунт, чтобы получать чеки и отчеты в личные сообщения.</p>
-                          <a
-                            href={vkLinkData.vk_link}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex w-full justify-center items-center gap-2 px-4 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-bold transition-colors"
-                          >
-                            Привязать ВКонтакте <ExternalLink size={16} />
-                          </a>
-                          <p className="text-[11px] text-blue-600 text-center opacity-80 leading-tight">
-                            После перехода в диалог отправьте боту любое сообщение для подтверждения привязки.
-                          </p>
-                        </div>
-                      ) : (
-                        <div className="space-y-4">
-                          <div className="flex items-center gap-2 text-green-700 bg-green-100/50 px-3 py-2 rounded-lg border border-green-200 w-fit">
-                            <CheckCircle size={16} />
-                            <span className="text-sm font-bold">Аккаунт успешно привязан</span>
-                          </div>
-
-                          <div className="space-y-2 pt-2">
-                            <label className="flex items-center justify-between cursor-pointer p-3 bg-white hover:bg-blue-50/50 rounded-lg border border-blue-100 transition-colors shadow-sm">
-                              <div>
-                                <div className="text-sm font-bold text-gray-800">Новые продажи</div>
-                                <div className="text-[11px] text-gray-500 mt-0.5">Моментальные чеки в ЛС</div>
-                              </div>
-                              <input
-                                type="checkbox"
-                                className="w-4 h-4 text-blue-600 rounded cursor-pointer"
-                                checked={profileData.vk_notify_sales}
-                                onChange={(e) => toggleVkSetting('vk_notify_sales', e.target.checked)}
-                              />
-                            </label>
-
-                            <label className="flex items-center justify-between cursor-pointer p-3 bg-white hover:bg-blue-50/50 rounded-lg border border-blue-100 transition-colors shadow-sm">
-                              <div>
-                                <div className="text-sm font-bold text-gray-800">Отчет по складу</div>
-                                <div className="text-[11px] text-gray-500 mt-0.5">Сводка инвентаризации раз в сутки</div>
-                              </div>
-                              <input
-                                type="checkbox"
-                                className="w-4 h-4 text-blue-600 rounded cursor-pointer"
-                                checked={profileData.vk_notify_inventory}
-                                onChange={(e) => toggleVkSetting('vk_notify_inventory', e.target.checked)}
-                              />
-                            </label>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                </>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

@@ -88,6 +88,12 @@ def update_user(
     for key, value in update_dict.items():
         setattr(user, key, value)
 
+    if 'is_active' in update_dict and not update_dict['is_active']:
+        user.vk_id = None
+        user.vk_link_token = None
+        user.vk_notify_sales = False
+        user.vk_notify_inventory = False
+
     session.add(user)
     session.commit()
     session.refresh(user)
@@ -278,6 +284,34 @@ def update_vk_settings(
     session.refresh(user)
 
     return user
+
+
+@router.post("/{user_id}/vk-unbind")
+def unbind_vk_account(
+        user_id: int,
+        current_user: dict = Depends(get_current_user),
+        session: Session = Depends(get_session)
+):
+    user = session.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+
+    # Проверка прав: отвязать может либо админ, либо сам владелец
+    if current_user.get("role") != "admin":
+        current_db_user = session.exec(select(User).where(
+            User.username == current_user.get("username"))).first()
+        if not current_db_user or current_db_user.id != user_id:
+            raise HTTPException(status_code=403,
+                                detail="Нет прав для этого действия")
+
+    user.vk_id = None
+    user.vk_link_token = None
+    user.vk_notify_sales = False
+    user.vk_notify_inventory = False
+
+    session.add(user)
+    session.commit()
+    return {"status": "success", "message": "ВК аккаунт успешно отвязан"}
 
 @router.get("/me/vk-link")
 def get_my_vk_link(
