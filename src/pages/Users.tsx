@@ -1,6 +1,6 @@
 // src/pages/Users.tsx
 import React, { useState, useEffect } from 'react';
-import { UserPlus, Key, Shield, Copy, CheckCircle, Search, Edit2, UserX, UserCheck, Lock, Trash2 } from 'lucide-react';
+import { UserPlus, Key, Shield, Copy, CheckCircle, Search, Edit2, UserX, UserCheck, Lock, Trash2, Wallet } from 'lucide-react';
 import apiClient from '../api/axios';
 
 interface User {
@@ -10,6 +10,7 @@ interface User {
   phone: string | null;
   role: string;
   commission_percent: number;
+  rent_rate: number; // ДОБАВЛЕНО: Стоимость аренды
   balance: number;
   notes: string | null;
   is_active: boolean;
@@ -25,13 +26,15 @@ export const Users = () => {
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
+  const [isRentModalOpen, setIsRentModalOpen] = useState(false); // ДОБАВЛЕНО: Окно аренды
+  const [isSaving, setIsSaving] = useState(false); // Для анимации сохранения
 
-  // Выбранный пользователь для редактирования
+  // Выбранный пользователь
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
 
   // Формы
   const [createData, setCreateData] = useState({ username: '', full_name: '', phone: '', commission_percent: 15 });
-  const [editData, setEditData] = useState({ full_name: '', phone: '', commission_percent: 15, notes: '' });
+  const [editData, setEditData] = useState({ full_name: '', phone: '', commission_percent: 15, rent_rate: 0, notes: '' });
 
   // Генерация паролей
   const [generatedPassword, setGeneratedPassword] = useState('');
@@ -47,7 +50,6 @@ export const Users = () => {
       const res = await apiClient.get('/users/', {
         params: { search: searchQuery }
       });
-      // Оставляем только продавцов
       setUsers(res.data.filter((u: User) => u.role === 'seller'));
     } catch (error) {
       console.error("Ошибка загрузки пользователей:", error);
@@ -56,7 +58,6 @@ export const Users = () => {
     }
   };
 
-  // --- ГЕНЕРАТОР ПАРОЛЕЙ ---
   const generatePassword = () => {
     const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$';
     let pass = '';
@@ -87,16 +88,20 @@ export const Users = () => {
   };
 
   const handleUpdateUser = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!selectedUser) return;
-    try {
-      await apiClient.patch(`/users/${selectedUser.id}`, editData);
-      setIsEditModalOpen(false);
-      fetchUsers();
-    } catch (error) {
-      alert("Ошибка при сохранении");
-    }
-  };
+  e.preventDefault();
+  if (!selectedUser) return;
+
+  try {
+    setIsSaving(true); // Включаем загрузку
+    await apiClient.patch(`/users/${selectedUser.id}`, editData);
+    setIsEditModalOpen(false);
+    await fetchUsers(); // Дожидаемся обновления списка
+  } catch (error) {
+    alert("Ошибка при сохранении");
+  } finally {
+    setIsSaving(false); // Выключаем загрузку
+  }
+};
 
   const handleChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -123,14 +128,43 @@ export const Users = () => {
   };
 
   const handleDeleteUser = async (user: User) => {
-      if (!window.confirm(`ВНИМАНИЕ! Вы навсегда удаляете аккаунт "${user.username}". Продолжить?`)) return;
-      try {
-        await apiClient.delete(`/users/${user.id}`);
-        fetchUsers();
-      } catch (error: any) {
-        alert(error.response?.data?.detail || "Ошибка при удалении");
-      }
-    };
+    if (!window.confirm(`ВНИМАНИЕ! Вы навсегда удаляете аккаунт "${user.username}". Продолжить?`)) return;
+    try {
+      await apiClient.delete(`/users/${user.id}`);
+      fetchUsers();
+    } catch (error: any) {
+      alert(error.response?.data?.detail || "Ошибка при удалении");
+    }
+  };
+
+  // ДОБАВЛЕНО: Логика списания аренды с вызовом подтверждения
+  const handleChargeRent = async (method: 'balance' | 'own_funds') => {
+    if (!selectedUser) return;
+
+    if (selectedUser.rent_rate <= 0) {
+      alert("У этого автора не указана стоимость аренды (0 ₽). Сначала задайте её в настройках профиля (иконка карандаша).");
+      return;
+    }
+
+    const methodText = method === 'balance'
+      ? `Списать ${selectedUser.rent_rate} ₽ со счета продавца?`
+      : `Оформить оплату ${selectedUser.rent_rate} ₽ со своих средств (без изменения баланса)?`;
+
+    if (!window.confirm(methodText)) return;
+
+    try {
+      await apiClient.post('/transactions/rent', {
+        seller_id: selectedUser.id,
+        amount: selectedUser.rent_rate,
+        payment_method: method
+      });
+      alert("Оплата аренды успешно зафиксирована!");
+      setIsRentModalOpen(false);
+      fetchUsers(); // Обновляем балансы
+    } catch (error: any) {
+      alert(error.response?.data?.detail || "Ошибка при списании аренды");
+    }
+  };
 
   // --- ХЕНДЛЕРЫ ОТКРЫТИЯ ОКОН ---
   const openEditModal = (user: User) => {
@@ -139,6 +173,7 @@ export const Users = () => {
       full_name: user.full_name || '',
       phone: user.phone || '',
       commission_percent: user.commission_percent,
+      rent_rate: user.rent_rate || 0, // Подтягиваем ставку аренды
       notes: user.notes || ''
     });
     setIsEditModalOpen(true);
@@ -148,6 +183,11 @@ export const Users = () => {
     setSelectedUser(user);
     setGeneratedPassword('');
     setIsPasswordModalOpen(true);
+  };
+
+  const openRentModal = (user: User) => {
+    setSelectedUser(user);
+    setIsRentModalOpen(true);
   };
 
   return (
@@ -195,52 +235,60 @@ export const Users = () => {
               <tr className="bg-gray-50 border-b border-gray-100">
                 <th className="p-4 text-sm font-semibold text-gray-600">Аккаунт</th>
                 <th className="p-4 text-sm font-semibold text-gray-600">Контакты</th>
-                <th className="p-4 text-sm font-semibold text-gray-600">Комиссия точки</th>
+                <th className="p-4 text-sm font-semibold text-gray-600">Комиссия</th>
+                <th className="p-4 text-sm font-semibold text-gray-600">Аренда полки</th>
                 <th className="p-4 text-sm font-semibold text-gray-600">Баланс</th>
                 <th className="p-4 text-sm font-semibold text-gray-600 text-right">Управление</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
               {users.map((user) => {
-                  // Вычисляем, прошло ли 72 часа
-                  const isDeleteAllowed = (new Date().getTime() - new Date(user.created_at).getTime()) < 72 * 60 * 60 * 1000;
+                const isDeleteAllowed = (new Date().getTime() - new Date(user.created_at).getTime()) < 72 * 60 * 60 * 1000;
 
-                  return (
-                    <tr key={user.id} className={`transition-colors ${!user.is_active ? 'bg-red-50/30' : 'hover:bg-gray-50'}`}>
-                  <td className="p-4">
-                    <div className="flex items-center gap-2">
-                      <p className={`font-bold ${!user.is_active ? 'text-gray-500 line-through' : 'text-gray-900'}`}>{user.username}</p>
-                      {!user.is_active && <span className="bg-red-100 text-red-600 text-[10px] px-2 py-0.5 rounded uppercase font-bold">Блок</span>}
-                    </div>
-                    <p className="text-xs text-gray-400 mt-0.5">ID: {user.id}</p>
-                  </td>
-                  <td className="p-4 text-sm">
-                    <p className="text-gray-900 font-medium">{user.full_name || '—'}</p>
-                    <p className="text-gray-500">{user.phone || '—'}</p>
-                  </td>
-                  <td className="p-4">
-                    <span className="bg-indigo-50 text-indigo-700 font-bold px-2 py-1 rounded text-sm">{user.commission_percent}%</span>
-                  </td>
-                  <td className="p-4 text-sm font-bold text-gray-900">{user.balance.toLocaleString('ru-RU')} ₽</td>
-                  <td className="p-4 text-right">
-                    <div className="flex justify-end gap-1">
-                      <button onClick={() => openEditModal(user)} className="p-1.5 text-indigo-600 hover:bg-indigo-100 rounded transition-colors" title="Профиль и заметки">
-                        <Edit2 size={16} />
-                      </button>
-                      <button onClick={() => openPasswordModal(user)} className="p-1.5 text-orange-600 hover:bg-orange-100 rounded transition-colors" title="Сменить пароль">
-                        <Key size={16} />
-                      </button>
-                      <button onClick={() => handleToggleStatus(user)} className={`p-1.5 rounded transition-colors ${user.is_active ? 'text-red-500 hover:bg-red-100' : 'text-green-600 hover:bg-green-100'}`} title={user.is_active ? "Заблокировать" : "Разблокировать"}>
-                        {user.is_active ? <UserX size={16} /> : <UserCheck size={16} />}
-                      </button>
-                      {isDeleteAllowed && (
+                return (
+                  <tr key={user.id} className={`transition-colors ${!user.is_active ? 'bg-red-50/30' : 'hover:bg-gray-50'}`}>
+                    <td className="p-4">
+                      <div className="flex items-center gap-2">
+                        <p className={`font-bold ${!user.is_active ? 'text-gray-500 line-through' : 'text-gray-900'}`}>{user.username}</p>
+                        {!user.is_active && <span className="bg-red-100 text-red-600 text-[10px] px-2 py-0.5 rounded uppercase font-bold">Блок</span>}
+                      </div>
+                      <p className="text-xs text-gray-400 mt-0.5">ID: {user.id}</p>
+                    </td>
+                    <td className="p-4 text-sm">
+                      <p className="text-gray-900 font-medium">{user.full_name || '—'}</p>
+                      <p className="text-gray-500">{user.phone || '—'}</p>
+                    </td>
+                    <td className="p-4">
+                      <span className="bg-indigo-50 text-indigo-700 font-bold px-2 py-1 rounded text-sm">{user.commission_percent}%</span>
+                    </td>
+                    {/* ДОБАВЛЕНО: Вывод стоимости аренды */}
+                    <td className="p-4 text-sm font-medium text-gray-700">
+                      {user.rent_rate > 0 ? `${user.rent_rate} ₽` : <span className="text-gray-400 text-xs">Не задана</span>}
+                    </td>
+                    <td className="p-4 text-sm font-bold text-gray-900">{user.balance.toLocaleString('ru-RU')} ₽</td>
+                    <td className="p-4 text-right">
+                      <div className="flex justify-end gap-1">
+                        {/* ДОБАВЛЕНО: Кнопка вызова окна аренды */}
+                        <button onClick={() => openRentModal(user)} className="p-1.5 text-blue-600 hover:bg-blue-100 rounded transition-colors" title="Списать аренду">
+                          <Wallet size={16} />
+                        </button>
+                        <button onClick={() => openEditModal(user)} className="p-1.5 text-indigo-600 hover:bg-indigo-100 rounded transition-colors" title="Профиль и настройки">
+                          <Edit2 size={16} />
+                        </button>
+                        <button onClick={() => openPasswordModal(user)} className="p-1.5 text-orange-600 hover:bg-orange-100 rounded transition-colors" title="Сменить пароль">
+                          <Key size={16} />
+                        </button>
+                        <button onClick={() => handleToggleStatus(user)} className={`p-1.5 rounded transition-colors ${user.is_active ? 'text-red-500 hover:bg-red-100' : 'text-green-600 hover:bg-green-100'}`} title={user.is_active ? "Заблокировать" : "Разблокировать"}>
+                          {user.is_active ? <UserX size={16} /> : <UserCheck size={16} />}
+                        </button>
+                        {isDeleteAllowed && (
                           <button onClick={() => handleDeleteUser(user)} className="p-1.5 text-red-600 hover:bg-red-100 rounded transition-colors" title="Удалить навсегда (доступно 72ч)">
                             <Trash2 size={16} />
                           </button>
                         )}
-                    </div>
-                  </td>
-                </tr>
+                      </div>
+                    </td>
+                  </tr>
                 );
               })}
             </tbody>
@@ -248,7 +296,7 @@ export const Users = () => {
         )}
       </div>
 
-      {/* МОДАЛЬНОЕ ОКНО СОЗДАНИЯ (Оставлено почти без изменений) */}
+      {/* МОДАЛЬНОЕ ОКНО СОЗДАНИЯ */}
       {isCreateModalOpen && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-xl">
@@ -312,10 +360,15 @@ export const Users = () => {
                   <label className="block text-sm font-medium text-gray-700 mb-1">Комиссия точки (%)</label>
                   <input required type="number" className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:border-indigo-500" value={editData.commission_percent} onChange={(e) => setEditData({...editData, commission_percent: parseFloat(e.target.value)})} />
                 </div>
+                {/* ДОБАВЛЕНО: Поле для изменения стоимости аренды */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Телефон</label>
-                  <input type="text" className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:border-indigo-500" value={editData.phone} onChange={(e) => setEditData({...editData, phone: e.target.value})} />
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Аренда полки (₽)</label>
+                  <input required type="number" min="0" className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:border-indigo-500" value={editData.rent_rate} onChange={(e) => setEditData({...editData, rent_rate: parseFloat(e.target.value) || 0})} />
                 </div>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Телефон</label>
+                <input type="text" className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:border-indigo-500" value={editData.phone} onChange={(e) => setEditData({...editData, phone: e.target.value})} />
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Приватная заметка (видит только Админ)</label>
@@ -331,6 +384,50 @@ export const Users = () => {
                 <button type="submit" className="flex-1 py-2 text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg font-medium">Сохранить</button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ДОБАВЛЕНО: МОДАЛЬНОЕ ОКНО СПИСАНИЯ АРЕНДЫ */}
+      {isRentModalOpen && selectedUser && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-xl">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="p-3 bg-blue-100 text-blue-600 rounded-full"><Wallet size={24} /></div>
+              <div>
+                <h2 className="text-lg font-bold text-gray-900">Оплата аренды полки</h2>
+                <p className="text-sm text-gray-500">{selectedUser.username}</p>
+              </div>
+            </div>
+
+            <div className="mb-6 p-4 bg-gray-50 border border-gray-200 rounded-xl text-center">
+              <p className="text-sm text-gray-600 mb-1">Установленная стоимость:</p>
+              <p className="text-2xl font-bold text-gray-900">{selectedUser.rent_rate} ₽</p>
+            </div>
+
+            <div className="space-y-3">
+              <button
+                onClick={() => handleChargeRent('balance')}
+                className="w-full py-3 px-4 bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100 rounded-xl font-medium transition-colors text-left flex flex-col"
+              >
+                <span className="block text-base">Списать со счета продавца</span>
+                <span className="block text-xs font-normal opacity-80 mt-0.5">Баланс автора будет уменьшен на сумму аренды</span>
+              </button>
+
+              <button
+                onClick={() => handleChargeRent('own_funds')}
+                className="w-full py-3 px-4 bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 rounded-xl font-medium transition-colors text-left flex flex-col"
+              >
+                <span className="block text-base">Оплата со своих средств</span>
+                <span className="block text-xs font-normal opacity-80 mt-0.5">Учитывается в финансах, но баланс останется без изменений</span>
+              </button>
+            </div>
+
+            <div className="mt-6 pt-4 border-t border-gray-100">
+              <button onClick={() => setIsRentModalOpen(false)} className="w-full py-2 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg font-medium">
+                Отмена
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -362,10 +459,30 @@ export const Users = () => {
                 <p className="text-[11px] text-orange-600 text-center leading-tight">После сохранения старый пароль продавца перестанет работать.</p>
               </div>
 
-              <div className="flex gap-3 pt-4">
-                <button type="button" onClick={() => setIsPasswordModalOpen(false)} className="flex-1 py-2 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg font-medium">Отмена</button>
-                <button type="submit" disabled={!generatedPassword} className="flex-1 py-2 text-white bg-orange-500 hover:bg-orange-600 disabled:bg-orange-300 rounded-lg font-medium">Сохранить</button>
-              </div>
+              <div className="flex gap-3 pt-4 border-t border-gray-100">
+                  <button
+                    type="button"
+                    disabled={isSaving}
+                    onClick={() => setIsEditModalOpen(false)}
+                    className="flex-1 py-2 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg font-medium disabled:opacity-50"
+                  >
+                    Отмена
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isSaving}
+                    className="flex-1 py-2 text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg font-medium flex items-center justify-center gap-2 disabled:bg-indigo-400"
+                  >
+                    {isSaving ? (
+                      <>
+                        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                        Сохранение...
+                      </>
+                    ) : (
+                      'Сохранить'
+                    )}
+                  </button>
+                </div>
             </form>
           </div>
         </div>

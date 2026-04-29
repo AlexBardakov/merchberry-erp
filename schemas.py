@@ -42,6 +42,11 @@ class TransactionCreateRequest(BaseModel):
     amount: float
     comment: Optional[str] = None
 
+class RentChargeRequest(BaseModel):
+    seller_id: int
+    amount: float
+    payment_method: str  # "balance" (с баланса) или "own_funds" (со своих средств)
+
 class TransactionUpdateRequest(BaseModel):
     seller_id: Optional[int] = None
     product_identifier: Optional[str] = None
@@ -74,6 +79,7 @@ class UserUpdate(BaseModel):
     full_name: Optional[str] = None
     phone: Optional[str] = None
     commission_percent: Optional[float] = None
+    rent_rate: Optional[float] = None
     notes: Optional[str] = None
     is_active: Optional[bool] = None
 

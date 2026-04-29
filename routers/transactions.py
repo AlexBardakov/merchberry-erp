@@ -9,7 +9,7 @@ from database import get_session
 from models import Transaction, User, Product
 from auth import get_current_user, get_current_admin
 from schemas import TransactionCreateRequest, TransactionRead, \
-    TransactionBulkReassignRequest, TransactionUpdateRequest
+    TransactionBulkReassignRequest, TransactionUpdateRequest, RentChargeRequest
 from utils import create_audit_log
 from routers.vk_bot import send_vk_message_sync
 
@@ -82,10 +82,73 @@ def apply_balance_correction(
 
     return {"status": "success", "new_balance": user.balance}
 
+
+@router.post("/rent", response_model=TransactionRead)
+def charge_rent(
+        req: RentChargeRequest,
+        admin_data: dict = Depends(get_current_admin),
+        session: Session = Depends(get_session)
+):
+    if req.payment_method not in ["balance", "own_funds"]:
+        raise HTTPException(status_code=400,
+                            detail="Неверный метод оплаты аренды")
+
+    # Блокируем строку пользователя для защиты от параллельных изменений
+    seller = session.exec(
+        select(User).where(User.id == req.seller_id).with_for_update()
+    ).first()
+
+    if not seller:
+        raise HTTPException(status_code=404, detail="Продавец не найден")
+
+    old_balance = seller.balance
+
+    if req.payment_method == "balance":
+        tx_type = "rent_balance"
+        tx_comment = "Оплата аренды полки (Списание с баланса)"
+        # Уменьшаем баланс
+        seller.balance -= req.amount
+    else:
+        tx_type = "rent_own"
+        tx_comment = "Оплата аренды полки (Аренда со своих средств)"
+        # Баланс НЕ меняем, транзакция просто для учета
+
+    # Создаем транзакцию. Записываем сумму с минусом для наглядности (списание)
+    new_transaction = Transaction(
+        type=tx_type,
+        amount=-req.amount,
+        comment=tx_comment,
+        seller_id=seller.id
+    )
+
+    session.add(new_transaction)
+    session.add(seller)
+    session.flush()  # Получаем ID новой транзакции до фиксации в БД
+
+    # Пишем в лог аудита
+    create_audit_log(
+        session=session,
+        actor=admin_data.get("username", "admin"),
+        entity_name="User",
+        entity_id=seller.id,
+        action=f"rent_charge_{req.payment_method}",
+        changes={
+            "balance": {"old": old_balance, "new": seller.balance},
+            "transaction_id": new_transaction.id,
+            "type": tx_type,
+            "amount": req.amount
+        }
+    )
+
+    session.commit()
+    session.refresh(new_transaction)
+
+    return new_transaction
+
 @router.get("/", response_model=List[TransactionRead])
 def get_transactions(
         seller_filter: Optional[str] = Query("all", description="all, unassigned, или ID продавца"),
-        type_filter: Optional[str] = Query("all", description="Тип операции: sale, payout, rent, correction"),
+        type_filter: Optional[str] = Query("all", description="Тип операции: sale, payout, rent_balance, rent_own, correction"),
         min_amount: Optional[float] = Query(None, description="Минимальная сумма"),
         max_amount: Optional[float] = Query(None, description="Максимальная сумма"),
         start_date: Optional[datetime] = Query(None, description="Начальная дата (YYYY-MM-DDTHH:MM:SS)"),
