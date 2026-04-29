@@ -48,6 +48,7 @@ export const Finance = () => {
   // Модальное окно Админа
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [formData, setFormData] = useState({ seller_id: '', type: 'payout', amount: '', comment: '' });
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Стейты для окна редактирования
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
@@ -127,6 +128,9 @@ export const Finance = () => {
   const handleCreateTransaction = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.seller_id || !formData.amount) return;
+    if (isSubmitting) return; // Защита от двойного клика
+
+    setIsSubmitting(true);
     try {
       await apiClient.post('/transactions/', {
         seller_id: parseInt(formData.seller_id),
@@ -140,6 +144,8 @@ export const Finance = () => {
       fetchTransactions();
     } catch (error) {
       alert("Ошибка при создании транзакции.");
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -177,7 +183,11 @@ export const Finance = () => {
     switch(type) {
       case 'sale': return { label: 'Продажа', color: 'text-green-600', bg: 'bg-green-100', icon: <ArrowUpRight size={16} /> };
       case 'payout': return { label: 'Выплата', color: 'text-blue-600', bg: 'bg-blue-100', icon: <ArrowDownRight size={16} /> };
-      case 'rent': return { label: 'Аренда', color: 'text-orange-600', bg: 'bg-orange-100', icon: <ArrowDownRight size={16} /> };
+      case 'rent':
+      case 'rent_balance':
+        return { label: 'Аренда (Баланс)', color: 'text-orange-600', bg: 'bg-orange-100', icon: <ArrowDownRight size={16} /> };
+      case 'rent_own':
+        return { label: 'Аренда (Личные)', color: 'text-orange-600', bg: 'bg-orange-100', icon: <ArrowDownRight size={16} /> };
       case 'correction': return { label: 'Корректировка', color: 'text-purple-600', bg: 'bg-purple-100', icon: <Wallet size={16} /> };
       default: return { label: 'Операция', color: 'text-gray-600', bg: 'bg-gray-100', icon: <Receipt size={16} /> };
     }
@@ -220,7 +230,7 @@ export const Finance = () => {
               <option value="all">Все типы</option>
               <option value="sale">Только Продажи</option>
               <option value="payout">Выплаты авторам</option>
-              <option value="rent">Оплата аренды</option>
+              <option value="rent_all">Оплата аренды (Все)</option>
               <option value="correction">Корректировки</option>
             </select>
           </div>
@@ -392,7 +402,8 @@ export const Finance = () => {
                   value={formData.type} onChange={(e) => setFormData({...formData, type: e.target.value})}
                 >
                   <option value="payout">Выплата продавцу на карту (Списание с баланса)</option>
-                  <option value="rent">Оплата аренды полки (Списание с баланса)</option>
+                  <option value="rent_balance">Оплата аренды полки (Списание с баланса)</option>
+                  <option value="rent_own">Оплата аренды полки (Аренда со своих средств)</option>
                   <option value="correction">Ручная корректировка (+ или -)</option>
                 </select>
               </div>
@@ -414,7 +425,9 @@ export const Finance = () => {
               </div>
               <div className="flex gap-3 pt-4 border-t border-gray-100">
                 <button type="button" onClick={() => setIsModalOpen(false)} className="flex-1 py-2 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg font-medium">Отмена</button>
-                <button type="submit" className="flex-1 py-2 text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg font-medium">Провести</button>
+                <button type="submit" disabled={isSubmitting} className="flex-1 py-2 text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg font-medium disabled:opacity-50">
+                  {isSubmitting ? 'Обработка...' : 'Провести'}
+                </button>
               </div>
             </form>
           </div>

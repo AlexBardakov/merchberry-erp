@@ -145,15 +145,23 @@ def charge_rent(
 
     return new_transaction
 
+
 @router.get("/", response_model=List[TransactionRead])
 def get_transactions(
-        seller_filter: Optional[str] = Query("all", description="all, unassigned, или ID продавца"),
-        type_filter: Optional[str] = Query("all", description="Тип операции: sale, payout, rent_balance, rent_own, correction"),
-        min_amount: Optional[float] = Query(None, description="Минимальная сумма"),
-        max_amount: Optional[float] = Query(None, description="Максимальная сумма"),
-        start_date: Optional[datetime] = Query(None, description="Начальная дата (YYYY-MM-DDTHH:MM:SS)"),
-        end_date: Optional[datetime] = Query(None, description="Конечная дата (YYYY-MM-DDTHH:MM:SS)"),
-        sort_by: Optional[str] = Query("date_desc", description="Сортировка: date_desc, date_asc, amount_desc, amount_asc"),
+        seller_filter: Optional[str] = Query("all",
+                                             description="all, unassigned, или ID продавца"),
+        type_filter: Optional[str] = Query("all",
+                                           description="Тип операции: sale, payout, rent_balance, rent_own, correction"),
+        min_amount: Optional[float] = Query(None,
+                                            description="Минимальная сумма"),
+        max_amount: Optional[float] = Query(None,
+                                            description="Максимальная сумма"),
+        start_date: Optional[datetime] = Query(None,
+                                               description="Начальная дата (YYYY-MM-DDTHH:MM:SS)"),
+        end_date: Optional[datetime] = Query(None,
+                                             description="Конечная дата (YYYY-MM-DDTHH:MM:SS)"),
+        sort_by: Optional[str] = Query("date_desc",
+                                       description="Сортировка: date_desc, date_asc, amount_desc, amount_asc"),
         limit: int = Query(50, ge=1, le=100),
         offset: int = Query(0, ge=0),
         current_user: dict = Depends(get_current_user),
@@ -161,19 +169,32 @@ def get_transactions(
 ):
     statement = select(Transaction)
 
-    # 1. Фильтр по роли и продавцу (Задача 3)
-    if current_user.get("role") == "seller":
-        user_in_db = session.exec(select(User).where(User.username == current_user.get("username"))).first()
+    # 1. НАДЕЖНАЯ ПРОВЕРКА РОЛИ (Исправление доступа)
+    username = current_user.get("username")
+    user_in_db = session.exec(
+        select(User).where(User.username == username)).first()
+
+    if not user_in_db:
+        raise HTTPException(status_code=401, detail="Пользователь не найден")
+
+    # Ограничиваем видимость чеков на основе реальной роли из БД
+    if user_in_db.role == "seller":
         statement = statement.where(Transaction.seller_id == user_in_db.id)
-    elif current_user.get("role") == "admin":
+    elif user_in_db.role == "admin":
         if seller_filter == "unassigned":
             statement = statement.where(Transaction.seller_id == None)
         elif seller_filter != "all" and seller_filter.isdigit():
-            statement = statement.where(Transaction.seller_id == int(seller_filter))
+            statement = statement.where(
+                Transaction.seller_id == int(seller_filter))
 
     # 2. Фильтр по типу операции
     if type_filter and type_filter != "all":
-        statement = statement.where(Transaction.type == type_filter)
+        if type_filter == "rent_all":
+            # Ищем и старые записи (rent), и новые (rent_balance, rent_own)
+            statement = statement.where(
+                Transaction.type.in_(["rent", "rent_balance", "rent_own"]))
+        else:
+            statement = statement.where(Transaction.type == type_filter)
 
     # 3. Фильтр по сумме
     if min_amount is not None:
@@ -222,7 +243,10 @@ def create_manual_transaction(
     )
 
     old_balance = seller.balance
-    seller.balance += req.amount
+
+    # Если аренда со своих средств, то баланс пользователя НЕ меняем
+    if req.type != "rent_own":
+        seller.balance += req.amount
 
     session.add(new_transaction)
     session.add(seller)
