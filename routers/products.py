@@ -4,6 +4,7 @@ import secrets
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from sqlmodel import Session, select, col, or_
 from typing import List, Optional
+from pydantic import BaseModel
 
 from database import get_session
 from models import Product, User
@@ -13,6 +14,9 @@ from utils import create_audit_log
 
 router = APIRouter(prefix="/api/products", tags=["Products"])
 
+class ProductMergeRequest(BaseModel):
+    target_id: int
+    source_ids: List[int]
 
 # В файле routers/products.py
 @router.get("/", response_model=List[ProductRead])
@@ -63,6 +67,10 @@ def get_products(
         statement = statement.order_by(Product.base_price)
     elif sort_by == "price_desc":
         statement = statement.order_by(col(Product.base_price).desc())
+    elif sort_by == "stock_asc":  # НОВОЕ
+        statement = statement.order_by(Product.stock)
+    elif sort_by == "stock_desc":  # НОВОЕ
+        statement = statement.order_by(col(Product.stock).desc())
 
     return session.exec(statement.offset(offset).limit(limit)).all()
 
@@ -389,6 +397,59 @@ def confirm_products_import(
 
     session.commit()
     return {"message": "Импорт успешно завершен", "stats": stats}
+
+
+@router.post("/merge")
+def merge_products(
+        req: ProductMergeRequest,
+        admin_data: dict = Depends(get_current_admin),
+        session: Session = Depends(get_session)
+):
+    target = session.get(Product, req.target_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="Основной товар не найден")
+
+    # Получаем все товары-дубликаты
+    sources = session.exec(
+        select(Product).where(col(Product.id).in_(req.source_ids))).all()
+
+    total_stock_added = 0
+    merged_names = []
+
+    for source in sources:
+        if source.id == target.id:
+            continue
+
+        total_stock_added += source.stock
+        merged_names.append(source.name)
+
+        # Обнуляем остаток и отправляем дубликат в архив
+        source.stock = 0
+        source.is_obsolete = True
+        session.add(source)
+
+    # Добавляем остатки в основной товар
+    target.stock += total_stock_added
+    session.add(target)
+
+    # Логируем действие
+    admin_username = admin_data.get("username", "admin")
+    create_audit_log(
+        session=session,
+        actor=admin_username,
+        entity_name="Product",
+        entity_id=target.id,
+        action="merge_products",
+        changes={
+            "stock_added": total_stock_added,
+            "merged_from_ids": req.source_ids,
+            "merged_names": merged_names
+        }
+    )
+
+    session.commit()
+    return {"status": "success", "message": "Товары успешно объединены",
+            "added_stock": total_stock_added}
 
 
 @router.get("/low-stock", response_model=List[ProductRead])

@@ -179,9 +179,10 @@ export const Finance = () => {
     }
   };
 
-  const getTransactionTypeInfo = (type: string) => {
+const getTransactionTypeInfo = (type: string) => {
     switch(type) {
       case 'sale': return { label: 'Продажа', color: 'text-green-600', bg: 'bg-green-100', icon: <ArrowUpRight size={16} /> };
+      case 'return': return { label: 'Возврат товара', color: 'text-red-600', bg: 'bg-red-100', icon: <ArrowDownRight size={16} /> }; // <--- НОВАЯ СТРОКА
       case 'payout': return { label: 'Выплата', color: 'text-blue-600', bg: 'bg-blue-100', icon: <ArrowDownRight size={16} /> };
       case 'rent':
       case 'rent_balance':

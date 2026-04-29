@@ -42,3 +42,24 @@ class BusinessRuClient:
 
         res = requests.get(f"{self.base_url}/retailchecks.json", params=params)
         return res.json().get("result", []) if res.status_code == 200 else []
+
+    def get_returns(self, limit=100, page=1):
+        if not self.token: self._repair_token()
+
+        params = {
+            "app_id": self.app_id,
+            "limit": limit,
+            "page": page,
+            "with_goods": 1,
+            "order_by[date]": "DESC"
+        }
+
+        params_string = urlencode(sorted(params.items()))
+        # Подпись для данных: token + secret + params
+        raw_string = self.token + self.secret + params_string
+        params["app_psw"] = hashlib.md5(raw_string.encode('utf-8')).hexdigest()
+
+        # Обращаемся к retailreturns.json
+        res = requests.get(f"{self.base_url}/retailreturns.json",
+                           params=params)
+        return res.json().get("result", []) if res.status_code == 200 else []

@@ -3,7 +3,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer
 } from 'recharts';
 import apiClient from '../api/axios';
-import { Package, TrendingUp, Wallet, ChevronDown, ChevronUp, Calendar, Download, Users } from 'lucide-react';
+import { Package, TrendingUp, Wallet, ChevronDown, ChevronUp, Calendar, Download, Users, X } from 'lucide-react';
 
 // --- ИНТЕРФЕЙСЫ БЭКЕНДА ---
 interface TopProduct {
@@ -65,6 +65,9 @@ export const Dashboard = () => {
   const [compDates1, setCompDates1] = useState({ start: formatDate(getPastDate(60)), end: formatDate(getPastDate(31)) });
   const [compDates2, setCompDates2] = useState({ start: formatDate(getPastDate(30)), end: formatDate(new Date()) });
   const [isCompLoading, setIsCompLoading] = useState(false);
+
+  // --- СОСТОЯНИЯ ДЛЯ МОДАЛЬНОГО ОКНА ---
+  const [selectedBarData, setSelectedBarData] = useState<ChartDataPoint | null>(null);
 
   // 1. Загрузка списка авторов (только для Админа)
   useEffect(() => {
@@ -153,6 +156,9 @@ export const Dashboard = () => {
   const CustomTooltip = ({ active, payload, label }: any) => {
     if (active && payload && payload.length) {
       const data: ChartDataPoint = payload[0].payload;
+      const displayedProducts = data.products_info.slice(0, 3);
+      const hasMore = data.products_info.length > 3;
+
       return (
         <div className="bg-white p-4 rounded-lg shadow-lg border border-gray-100 outline-none min-w-[200px]">
           <p className="font-bold text-gray-800 mb-2">{label}</p>
@@ -162,9 +168,16 @@ export const Dashboard = () => {
             <p className="text-sm text-orange-500">Комиссия: <span>{data.commission.toLocaleString('ru-RU')} ₽</span></p>
           </div>
           <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-1">Продано:</p>
-          <div className="text-sm text-gray-600 space-y-1 max-h-32 overflow-y-auto">
+          <div className="text-sm text-gray-600 space-y-1">
             {data.products_info.length > 0 ? (
-              data.products_info.map((prod, idx) => <p key={idx}>• {prod}</p>)
+              <>
+                {displayedProducts.map((prod, idx) => <p key={idx}>• {prod}</p>)}
+                {hasMore && (
+                  <p className="text-xs text-indigo-500 font-bold mt-2">
+                    Нажмите на столбик, чтобы увидеть всё ({data.products_info.length} поз.)
+                  </p>
+                )}
+              </>
             ) : (
               <p className="italic text-gray-400">Нет данных о товарах</p>
             )}
@@ -318,7 +331,13 @@ export const Dashboard = () => {
                     <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fill: '#6b7280', fontSize: 12 }} dy={10} />
                     <YAxis axisLine={false} tickLine={false} tick={{ fill: '#6b7280', fontSize: 12 }} />
                     <RechartsTooltip content={<CustomTooltip />} cursor={{ fill: '#f8fafc' }} />
-                    <Bar dataKey="full_amount" radius={[4, 4, 0, 0]} fill="#818cf8" className="transition-all hover:opacity-80" />
+                    <Bar
+                      dataKey="full_amount"
+                      radius={[4, 4, 0, 0]}
+                      fill="#818cf8"
+                      className="transition-all hover:opacity-80 cursor-pointer"
+                      onClick={(data) => setSelectedBarData(data.payload)}
+                    />
                   </BarChart>
                 </ResponsiveContainer>
               </div>
@@ -410,7 +429,48 @@ export const Dashboard = () => {
           </div>
         )}
       </div>
+        {/* МОДАЛЬНОЕ ОКНО С ДЕТАЛЯМИ ДНЯ */}
+      {selectedBarData && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-lg shadow-xl max-h-[90vh] flex flex-col">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-xl font-bold text-gray-900">Детали за {selectedBarData.label}</h2>
+              <button onClick={() => setSelectedBarData(null)} className="text-gray-400 hover:text-gray-600 transition-colors">
+                <X size={24} />
+              </button>
+            </div>
 
+            <div className="grid grid-cols-3 gap-4 mb-6 bg-gray-50 p-4 rounded-xl border border-gray-100 text-center">
+              <div>
+                <p className="text-[10px] text-gray-400 uppercase font-bold tracking-wider mb-1">Сумма</p>
+                <p className="text-lg font-bold text-gray-900">{selectedBarData.full_amount.toLocaleString('ru-RU')} ₽</p>
+              </div>
+              <div>
+                <p className="text-[10px] text-gray-400 uppercase font-bold tracking-wider mb-1">Доход</p>
+                <p className="text-lg font-bold text-green-600">{selectedBarData.profit.toLocaleString('ru-RU')} ₽</p>
+              </div>
+              <div>
+                <p className="text-[10px] text-gray-400 uppercase font-bold tracking-wider mb-1">Комиссия</p>
+                <p className="text-lg font-bold text-orange-500">{selectedBarData.commission.toLocaleString('ru-RU')} ₽</p>
+              </div>
+            </div>
+
+            <h3 className="text-sm font-bold text-gray-700 mb-3">Полный список проданных позиций:</h3>
+            <div className="flex-1 overflow-y-auto space-y-2 pr-2 custom-scrollbar">
+              {selectedBarData.products_info.length > 0 ? (
+                selectedBarData.products_info.map((prod, idx) => (
+                  <div key={idx} className="p-3 bg-white border border-gray-100 rounded-lg text-sm text-gray-700 shadow-sm flex items-start gap-2">
+                    <span className="text-indigo-400 font-bold">•</span>
+                    <span>{prod}</span>
+                  </div>
+                ))
+              ) : (
+                <p className="text-sm text-gray-500 italic text-center py-4">В этот день продаж не зафиксировано</p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

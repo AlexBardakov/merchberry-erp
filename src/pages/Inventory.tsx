@@ -40,6 +40,8 @@ export const Inventory = () => {
   const [importFile, setImportFile] = useState<File | null>(null);
   const [previewData, setPreviewData] = useState<any>(null);
   const [isImporting, setIsImporting] = useState(false);
+  const [isMergeModalOpen, setIsMergeModalOpen] = useState(false);
+  const [mergeTargetId, setMergeTargetId] = useState<number | null>(null);
 
   // НОВЫЕ СОСТОЯНИЯ: Комментарий и авторы
   const [importComment, setImportComment] = useState('');
@@ -62,6 +64,11 @@ export const Inventory = () => {
     fetchProducts();
     if (isAdmin && sellers.length === 0) fetchSellers();
   }, [page, sortBy, includeObsolete, sellerFilter]);
+
+  const handleFilterChange = (setter: any, value: any) => {
+    setter(value);
+    setPage(1); // Сбрасываем пагинацию при любой смене фильтра или сортировки
+  };
 
   const fetchProducts = async () => {
     try {
@@ -95,6 +102,21 @@ export const Inventory = () => {
   const handlePreviewImport = async () => {
     if (!importFile) return;
     setIsImporting(true);
+
+    // Определяем, первый ли это старт проекта (база пуста, мы на 1 странице и нет активных фильтров)
+    const isFirstLaunch = products.length === 0 && searchQuery === '' && sellerFilter === 'all' && !includeObsolete && page === 1;
+
+    // НОВОЕ: Автоматическая синхронизация чеков (ТОЛЬКО если это не первый запуск)
+    if (isAdmin && !isFirstLaunch) {
+      try {
+        // ИСПРАВЛЕНО: Теперь эндпоинт точно совпадает с роутером в transactions.py
+        await apiClient.post('/transactions/sync/sales');
+      } catch (syncError) {
+        console.error("Ошибка при предварительной синхронизации:", syncError);
+        alert("Предупреждение: Не удалось синхронизировать чеки Бизнес.ру перед импортом. Проверьте подключение. Анализ файла будет продолжен.");
+      }
+    }
+
     const formData = new FormData();
     formData.append('file', importFile);
     try {
@@ -109,7 +131,7 @@ export const Inventory = () => {
       setImportComment('');
     } catch (error: any) {
       console.error(error);
-      // Обработка строгой валидации столбцов (Задача 1)
+      // Обработка строгой валидации столбцов
       if (error.response && error.response.data && error.response.data.detail) {
         alert(`Ошибка загрузки: ${error.response.data.detail}`);
       } else {
@@ -394,7 +416,7 @@ export const Inventory = () => {
           {isAdmin && (
             <select
               className="border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-indigo-500"
-              value={sellerFilter} onChange={(e) => setSellerFilter(e.target.value)}
+              value={sellerFilter} onChange={(e) => handleFilterChange(setSellerFilter, e.target.value)}
             >
               <option value="all">Все продавцы</option>
               <option value="unassigned">⚠️ Нераспределенные (Ничейные)</option>
@@ -404,17 +426,19 @@ export const Inventory = () => {
 
           <select
             className="border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-indigo-500"
-            value={sortBy} onChange={(e) => setSortBy(e.target.value)}
+            value={sortBy} onChange={(e) => handleFilterChange(setSortBy, e.target.value)}
           >
-            <option value="name_asc">А-Я</option>
+            <option value="name_asc">А-Я (Название)</option>
             <option value="price_desc">Сначала дорогие</option>
             <option value="price_asc">Сначала дешевые</option>
+            <option value="stock_desc">Много на складе</option>
+            <option value="stock_asc">Мало на складе</option>
           </select>
 
           <label className="flex items-center gap-2 cursor-pointer border border-gray-300 px-3 py-2 rounded-lg hover:bg-gray-50">
             <input
               type="checkbox" className="rounded text-indigo-600 focus:ring-indigo-500 cursor-pointer"
-              checked={includeObsolete} onChange={(e) => setIncludeObsolete(e.target.checked)}
+              checked={includeObsolete} onChange={(e) => handleFilterChange(setIncludeObsolete, e.target.checked)}
             />
             <span className="text-sm font-medium text-gray-700">Архив</span>
           </label>
@@ -443,6 +467,15 @@ export const Inventory = () => {
             <button onClick={handleBulkArchive} className="px-3 py-1 bg-white text-red-600 border border-red-200 text-sm rounded hover:bg-red-50 flex items-center gap-1">
               <Archive size={14} /> Архивировать
             </button>
+            <button onClick={handleBulkArchive} className="px-3 py-1 bg-white text-red-600 border border-red-200 text-sm rounded hover:bg-red-50 flex items-center gap-1">
+              <Archive size={14} /> Архивировать
+            </button>
+            {/* НОВАЯ КНОПКА СЛИЯНИЯ */}
+            {selectedIds.length > 1 && (
+              <button onClick={() => setIsMergeModalOpen(true)} className="px-3 py-1 bg-white text-indigo-600 border border-indigo-200 text-sm rounded hover:bg-indigo-50 flex items-center gap-1">
+                <RefreshCw size={14} /> Объединить ({selectedIds.length})
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -579,6 +612,55 @@ export const Inventory = () => {
           </button>
         </div>
       </div>
+      {/* МОДАЛЬНОЕ ОКНО СЛИЯНИЯ */}
+      {isMergeModalOpen && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-2xl shadow-xl">
+            <div className="flex justify-between items-center mb-2">
+              <h2 className="text-xl font-bold text-gray-900">Слияние товаров</h2>
+              <button onClick={() => {setIsMergeModalOpen(false); setMergeTargetId(null);}} className="text-gray-400 hover:text-gray-600"><X size={24}/></button>
+            </div>
+            <p className="text-sm text-gray-500 mb-4">Выберите <strong>основной</strong> товар. Остатки остальных позиций прибавятся к нему, а сами дубликаты будут отправлены в архив.</p>
+
+            <div className="space-y-2 mb-6 max-h-[50vh] overflow-y-auto pr-2 custom-scrollbar">
+              {products.filter(p => selectedIds.includes(p.id)).map(p => (
+                <label key={p.id} className={`flex items-start gap-3 p-4 rounded-xl border cursor-pointer transition-all ${mergeTargetId === p.id ? 'border-indigo-500 bg-indigo-50 shadow-sm' : 'border-gray-200 hover:bg-gray-50'}`}>
+                  <input type="radio" name="mergeTarget" className="mt-1 w-4 h-4 text-indigo-600 focus:ring-indigo-500" checked={mergeTargetId === p.id} onChange={() => setMergeTargetId(p.id)} />
+                  <div className="flex-1">
+                    <p className="font-bold text-gray-900">{p.name}</p>
+                    <div className="flex gap-4 mt-1">
+                      <span className="text-xs text-gray-500">Артикул: <span className="font-medium text-gray-700">{p.sku || '—'}</span></span>
+                      <span className="text-xs text-gray-500">Цена: <span className="font-medium text-gray-700">{p.base_price} ₽</span></span>
+                      <span className="text-xs text-gray-500">На складе: <span className="font-bold text-indigo-600">{p.stock} шт.</span></span>
+                    </div>
+                  </div>
+                </label>
+              ))}
+            </div>
+
+            <button
+              disabled={!mergeTargetId}
+              onClick={async () => {
+                if (!mergeTargetId) return;
+                const sourceIds = selectedIds.filter(id => id !== mergeTargetId);
+                try {
+                  await apiClient.post('/products/merge', { target_id: mergeTargetId, source_ids: sourceIds });
+                  alert("Товары успешно объединены!");
+                  setIsMergeModalOpen(false);
+                  setMergeTargetId(null);
+                  setSelectedIds([]);
+                  fetchProducts();
+                } catch (error) {
+                  alert("Ошибка при объединении товаров");
+                }
+              }}
+              className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Выполнить слияние
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -277,12 +277,15 @@ def run_b2b_sync(session: Session, force_full: bool = False):
     client = BusinessRuClient()
 
     existing_check = session.exec(
-        select(Transaction).where(Transaction.external_check_id != None).limit(1)
+        select(Transaction).where(Transaction.external_check_id != None).limit(
+            1)
     ).first()
 
     is_first_sync = force_full or (existing_check is None)
 
     all_checks = []
+    all_returns = []
+
     if is_first_sync:
         page = 1
         while True:
@@ -290,21 +293,43 @@ def run_b2b_sync(session: Session, force_full: bool = False):
             if not checks: break
             all_checks.extend(checks)
             page += 1
+
+        page = 1
+        while True:
+            returns = client.get_returns(limit=250, page=page)
+            if not returns: break
+            all_returns.extend(returns)
+            page += 1
     else:
         all_checks = client.get_checks(limit=100, page=1)
+        all_returns = client.get_returns(limit=100, page=1)
+
+    # Помечаем операции для удобной обработки
+    for c in all_checks:
+        c["is_return"] = False
+    for r in all_returns:
+        r["is_return"] = True
+
+    # Объединяем списки продаж и возвратов в один массив
+    all_operations = all_checks + all_returns
 
     sync_conflicts = []
     processed_count = 0
     skipped_count = 0
     total_revenue = 0.0
 
-    for sale in all_checks:
-        check_id = str(sale.get("id", "")).strip()
-        if not check_id:
+    for op in all_operations:
+        is_return = op.get("is_return", False)
+        raw_id = str(op.get("id", "")).strip()
+
+        if not raw_id:
             continue
 
+        # Чтобы ID продаж и возвратов гарантированно не пересеклись в базе
+        external_id = f"return_{raw_id}" if is_return else raw_id
+
         # --- ПАРСИНГ РЕАЛЬНОЙ ДАТЫ ЧЕКА ---
-        raw_date = sale.get("date", "")
+        raw_date = op.get("date", "")
         check_date = datetime.now(timezone.utc)
         if raw_date:
             try:
@@ -314,9 +339,10 @@ def run_b2b_sync(session: Session, force_full: bool = False):
             except ValueError:
                 pass
 
-        # === ЖЕСТКАЯ ЗАЩИТА ОТ ДУБЛИРОВАНИЯ (Отступы исправлены) ===
+        # === ЖЕСТКАЯ ЗАЩИТА ОТ ДУБЛИРОВАНИЯ ===
         existing_txs = session.exec(
-            select(Transaction).where(Transaction.external_check_id == check_id)
+            select(Transaction).where(
+                Transaction.external_check_id == external_id)
         ).all()
 
         if existing_txs:
@@ -325,7 +351,7 @@ def run_b2b_sync(session: Session, force_full: bool = False):
             if has_manual:
                 skipped_count += 1
                 sync_conflicts.append({
-                    "check_id": check_id,
+                    "check_id": external_id,
                     "products": "Содержит ручные правки админа"
                 })
                 continue
@@ -335,13 +361,15 @@ def run_b2b_sync(session: Session, force_full: bool = False):
                 for old_tx in existing_txs:
                     if old_tx.seller_id:
                         seller = session.exec(
-                            select(User).where(User.id == old_tx.seller_id).with_for_update()
+                            select(User).where(
+                                User.id == old_tx.seller_id).with_for_update()
                         ).first()
                         if seller:
-                            seller.balance = round(seller.balance - old_tx.amount, 2)
+                            seller.balance = round(
+                                seller.balance - old_tx.amount, 2)
                             session.add(seller)
                     session.delete(old_tx)
-                session.flush() # Фиксируем удаления ПЕРЕД созданием новых
+                session.flush()  # Фиксируем удаления ПЕРЕД созданием новых
             else:
                 skipped_count += 1
                 continue
@@ -349,12 +377,13 @@ def run_b2b_sync(session: Session, force_full: bool = False):
         # === ОБРАБОТКА ТОВАРОВ ===
         grouped_data = {}
 
-        for item in sale.get("goods", []):
+        for item in op.get("goods", []):
             b2b_good_id = str(item.get("good_id", "")).strip()
             price = float(item.get("price", 0))
             count = int(float(item.get("amount", 1)))
 
-            product = session.exec(select(Product).where(Product.sku == b2b_good_id)).first()
+            product = session.exec(
+                select(Product).where(Product.sku == b2b_good_id)).first()
             seller_id = product.seller_id if product else None
 
             if product:
@@ -363,22 +392,32 @@ def run_b2b_sync(session: Session, force_full: bool = False):
                 raw_name = item.get("name", "Неизвестный товар")
                 name = f"{raw_name} [ID: {b2b_good_id}]"
 
+            # ОБНОВЛЕНИЕ СКЛАДА
             if product and not is_first_sync:
-                product.stock = max(0, product.stock - count)
+                if is_return:
+                    product.stock += count  # Плюсуем (возвращаем товар на склад)
+                else:
+                    product.stock = max(0,
+                                        product.stock - count)  # Минусуем (продажа)
                 session.add(product)
 
             if seller_id not in grouped_data:
                 grouped_data[seller_id] = {
-                    "full_amount": 0.0, "profit": 0.0, "commission": 0.0, "items": []
+                    "full_amount": 0.0, "profit": 0.0, "commission": 0.0,
+                    "items": []
                 }
 
-            total_item_price = price * count
+            # РАСЧЕТЫ С УЧЕТОМ ЗНАКА (продажа = +, возврат = -)
+            sign = -1 if is_return else 1
+            total_item_price = (price * count) * sign
+
             grouped_data[seller_id]["full_amount"] += total_item_price
             grouped_data[seller_id]["items"].append(f"{name} ({count} шт.)")
 
             if seller_id:
                 seller = session.get(User, seller_id)
-                commission_rate = seller.commission_percent if (seller and seller.is_active) else 15.0
+                commission_rate = seller.commission_percent if (
+                            seller and seller.is_active) else 15.0
             else:
                 commission_rate = 15.0
 
@@ -391,31 +430,50 @@ def run_b2b_sync(session: Session, force_full: bool = False):
         # === СОЗДАНИЕ ОБЪЕДИНЕННЫХ ТРАНЗАКЦИЙ ===
         for s_id, data in grouped_data.items():
             items_str = ", ".join(data["items"])
+
+            if is_return:
+                tx_type = "return"
+                orig_check = op.get("retail_check_id")
+                comment = f"Возврат по чеку #{orig_check} (Бизнес.Ру)" if orig_check else f"Возврат #{raw_id} (Бизнес.Ру)"
+            else:
+                tx_type = "sale"
+                comment = f"Чек #{raw_id} (Бизнес.Ру)"
+
             new_tx = Transaction(
-                type="sale",
+                type=tx_type,
                 full_amount=data["full_amount"],
                 amount=round(data["profit"], 2),
                 commission_amount=round(data["commission"], 2),
                 seller_id=s_id,
                 product_identifier=items_str,
-                comment=f"Чек #{check_id} (Бизнес.Ру)",
-                external_check_id=check_id,
+                comment=comment,
+                external_check_id=external_id,
                 date=check_date
             )
             session.add(new_tx)
 
             if s_id:
-                seller = session.exec(select(User).where(User.id == s_id).with_for_update()).first()
+                seller = session.exec(select(User).where(
+                    User.id == s_id).with_for_update()).first()
                 if seller and seller.is_active:
+                    # Изменяем баланс (для возвратов profit отрицательный, поэтому баланс уменьшится)
                     seller.balance = round(seller.balance + data["profit"], 2)
                     session.add(seller)
 
                     if seller.vk_id and seller.vk_notify_sales:
-                        msg = (
-                                f"💰 Новая продажа!\n\n"
-                                f"Вам начислено: {round(data['profit'], 2)} ₽\n"
-                                f"Товары:\n• " + "\n• ".join(data["items"])
-                        )
+                        if is_return:
+                            msg = (
+                                    f"🔄 Оформлен возврат товара!\n\n"
+                                    f"С вашего баланса списано: {abs(round(data['profit'], 2))} ₽\n"
+                                    f"Товары возвращены на склад:\n• " + "\n• ".join(
+                                data["items"])
+                            )
+                        else:
+                            msg = (
+                                    f"💰 Новая продажа!\n\n"
+                                    f"Вам начислено: {round(data['profit'], 2)} ₽\n"
+                                    f"Товары:\n• " + "\n• ".join(data["items"])
+                            )
                         send_vk_message_sync(seller.vk_id, msg)
 
             processed_count += 1
@@ -426,14 +484,14 @@ def run_b2b_sync(session: Session, force_full: bool = False):
     if processed_count == 0 and skipped_count == 0:
         return {
             "status": "error",
-            "message": "Новых чеков не найдено, повторений тоже нет.",
+            "message": "Новых чеков и возвратов не найдено.",
             "processed_items": 0, "skipped_checks": 0, "total_revenue": 0,
             "conflicts": []
         }
 
     return {
         "status": "success",
-        "message": f"Синхронизация завершена. Обработано новых транзакций: {processed_count}.",
+        "message": f"Синхронизация завершена. Обработано операций: {processed_count}.",
         "processed_items": processed_count,
         "skipped_checks": skipped_count,
         "total_revenue": total_revenue,
