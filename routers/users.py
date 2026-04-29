@@ -1,15 +1,21 @@
 import os
+import csv
+import io
+import string
 import secrets
+
 from dotenv import load_dotenv
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlmodel import Session, select, or_
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from sqlmodel import Session, select, or_, col
 from typing import List, Optional
 from datetime import date, timedelta, datetime, time, timezone
 
 from database import get_session
 from models import User
 from auth import get_password_hash, get_current_admin, get_current_user
-from schemas import UserCreate, UserUpdate, PasswordUpdate, UserUpdateSettings, UserRenameRequest, UserDeleteConfirmRequest, UserVKSettingsUpdate
+from schemas import UserCreate, UserUpdate, PasswordUpdate, UserUpdateSettings, \
+    UserRenameRequest, UserDeleteConfirmRequest, UserVKSettingsUpdate, \
+    BulkPasswordResetRequest
 from utils import create_audit_log
 
 load_dotenv()
@@ -304,3 +310,48 @@ def get_my_vk_link(
         "token": user.vk_link_token,
         "is_bound": user.vk_id is not None # Флаг, чтобы фронтенд знал, привязан ли уже аккаунт
     }
+
+
+def generate_random_password(length=8):
+    alphabet = string.ascii_letters + string.digits + "!@#$"
+    return ''.join(secrets.choice(alphabet) for _ in range(length))
+
+
+@router.post("/bulk-password-reset")
+def bulk_password_reset(
+        req: BulkPasswordResetRequest,
+        admin_data: dict = Depends(get_current_admin),
+        session: Session = Depends(get_session)
+):
+    # Получаем выбранных пользователей
+    users = session.exec(
+        select(User).where(col(User.id).in_(req.user_ids))).all()
+
+    if not users:
+        raise HTTPException(status_code=404, detail="Пользователи не найдены")
+
+    output = io.StringIO()
+    writer = csv.writer(output, delimiter=';')
+    # Добавили ID и Логин в заголовки
+    writer.writerow(['ID', 'Логин', 'ФИО', 'Новый пароль'])
+
+    for user in users:
+        new_password = generate_random_password()
+        user.hashed_password = get_password_hash(new_password)
+        session.add(user)
+
+        # Выгружаем расширенные данные
+        writer.writerow(
+            [user.id, user.username, user.full_name or '', new_password])
+
+    session.commit()
+    output.seek(0)
+
+    content = '\ufeff' + output.getvalue()
+
+    return Response(
+        content=content,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": "attachment; filename=passwords_reset.csv"}
+    )

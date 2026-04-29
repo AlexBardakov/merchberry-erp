@@ -174,3 +174,7 @@ class WidgetStats(BaseModel):
     sales_30_days: float
     sales_prev_30_days: float
     sales_trend_percent: float
+
+
+class BulkPasswordResetRequest(BaseModel):
+    user_ids: List[int]

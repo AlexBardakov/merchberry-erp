@@ -1,6 +1,6 @@
 // src/pages/Users.tsx
 import React, { useState, useEffect } from 'react';
-import { UserPlus, Key, Shield, Copy, CheckCircle, Search, Edit2, UserX, UserCheck, Lock, Trash2, Wallet } from 'lucide-react';
+import { UserPlus, Key, Shield, Copy, CheckCircle, Search, Edit2, UserX, UserCheck, Lock, Trash2, Wallet, CheckSquare, Square } from 'lucide-react';
 import apiClient from '../api/axios';
 
 interface User {
@@ -10,7 +10,7 @@ interface User {
   phone: string | null;
   role: string;
   commission_percent: number;
-  rent_rate: number; // ДОБАВЛЕНО: Стоимость аренды
+  rent_rate: number;
   balance: number;
   notes: string | null;
   is_active: boolean;
@@ -21,13 +21,16 @@ export const Users = () => {
   const [users, setUsers] = useState<User[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
+
+  // Состояние для массового выделения
+  const [selectedIds, setSelectedIds] = useState<number[]>([]);
 
   // Состояния модальных окон
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
-  const [isRentModalOpen, setIsRentModalOpen] = useState(false); // ДОБАВЛЕНО: Окно аренды
-  const [isSaving, setIsSaving] = useState(false); // Для анимации сохранения
+  const [isRentModalOpen, setIsRentModalOpen] = useState(false);
 
   // Выбранный пользователь
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
@@ -47,14 +50,55 @@ export const Users = () => {
   const fetchUsers = async () => {
     try {
       setIsLoading(true);
-      const res = await apiClient.get('/users/', {
-        params: { search: searchQuery }
-      });
+      const res = await apiClient.get('/users/', { params: { search: searchQuery } });
       setUsers(res.data.filter((u: User) => u.role === 'seller'));
+      setSelectedIds([]); // Сбрасываем выделение при обновлении списка
     } catch (error) {
       console.error("Ошибка загрузки пользователей:", error);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  // --- МАССОВЫЕ ДЕЙСТВИЯ ---
+  const toggleSelectAll = () => {
+    if (selectedIds.length === users.length) {
+      setSelectedIds([]);
+    } else {
+      setSelectedIds(users.map(u => u.id));
+    }
+  };
+
+  const toggleSelectOne = (id: number) => {
+    setSelectedIds(prev => prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]);
+  };
+
+  const handleBulkPasswordReset = async () => {
+    if (selectedIds.length === 0) return;
+    if (!window.confirm(`Вы уверены, что хотите сбросить пароли для ${selectedIds.length} авторов? Будет скачан CSV-файл с новыми данными.`)) return;
+
+    try {
+      setIsSaving(true);
+      const response = await apiClient.post('/users/bulk-password-reset',
+        { user_ids: selectedIds },
+        { responseType: 'blob' } // Важно для скачивания файла
+      );
+
+      // Логика скачивания файла в браузере
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `passwords_reset_${new Date().toISOString().slice(0,10)}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+
+      alert("Пароли успешно обновлены, файл сохранен.");
+      setSelectedIds([]);
+    } catch (error) {
+      alert("Ошибка при массовом сбросе паролей");
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -77,6 +121,7 @@ export const Users = () => {
     e.preventDefault();
     if (!generatedPassword) return alert("Сгенерируйте пароль!");
     try {
+      setIsSaving(true);
       await apiClient.post('/users/', { ...createData, password: generatedPassword, role: 'seller' });
       setIsCreateModalOpen(false);
       setGeneratedPassword('');
@@ -84,35 +129,39 @@ export const Users = () => {
       fetchUsers();
     } catch (error: any) {
       alert(error.response?.data?.detail || "Ошибка при создании");
+    } finally {
+      setIsSaving(false);
     }
   };
 
   const handleUpdateUser = async (e: React.FormEvent) => {
-  e.preventDefault();
-  if (!selectedUser) return;
-
-  try {
-    setIsSaving(true); // Включаем загрузку
-    await apiClient.patch(`/users/${selectedUser.id}`, editData);
-    setIsEditModalOpen(false);
-    await fetchUsers(); // Дожидаемся обновления списка
-  } catch (error) {
-    alert("Ошибка при сохранении");
-  } finally {
-    setIsSaving(false); // Выключаем загрузку
-  }
-};
+    e.preventDefault();
+    if (!selectedUser) return;
+    try {
+      setIsSaving(true);
+      await apiClient.patch(`/users/${selectedUser.id}`, editData);
+      setIsEditModalOpen(false);
+      await fetchUsers();
+    } catch (error) {
+      alert("Ошибка при сохранении");
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
   const handleChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedUser || !generatedPassword) return alert("Сгенерируйте новый пароль!");
     try {
+      setIsSaving(true);
       await apiClient.patch(`/users/${selectedUser.id}/password`, { new_password: generatedPassword });
       alert("Пароль успешно изменен!");
       setIsPasswordModalOpen(false);
       setGeneratedPassword('');
     } catch (error) {
       alert("Ошибка при смене пароля");
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -137,12 +186,10 @@ export const Users = () => {
     }
   };
 
-  // ДОБАВЛЕНО: Логика списания аренды с вызовом подтверждения
   const handleChargeRent = async (method: 'balance' | 'own_funds') => {
     if (!selectedUser) return;
-
     if (selectedUser.rent_rate <= 0) {
-      alert("У этого автора не указана стоимость аренды (0 ₽). Сначала задайте её в настройках профиля (иконка карандаша).");
+      alert("У этого автора не указана стоимость аренды (0 ₽). Сначала задайте её в настройках профиля.");
       return;
     }
 
@@ -153,6 +200,7 @@ export const Users = () => {
     if (!window.confirm(methodText)) return;
 
     try {
+      setIsSaving(true);
       await apiClient.post('/transactions/rent', {
         seller_id: selectedUser.id,
         amount: selectedUser.rent_rate,
@@ -160,9 +208,11 @@ export const Users = () => {
       });
       alert("Оплата аренды успешно зафиксирована!");
       setIsRentModalOpen(false);
-      fetchUsers(); // Обновляем балансы
+      fetchUsers();
     } catch (error: any) {
       alert(error.response?.data?.detail || "Ошибка при списании аренды");
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -173,7 +223,7 @@ export const Users = () => {
       full_name: user.full_name || '',
       phone: user.phone || '',
       commission_percent: user.commission_percent,
-      rent_rate: user.rent_rate || 0, // Подтягиваем ставку аренды
+      rent_rate: user.rent_rate || 0,
       notes: user.notes || ''
     });
     setIsEditModalOpen(true);
@@ -195,14 +245,30 @@ export const Users = () => {
       <div className="flex justify-between items-end">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Авторы и Арендаторы</h1>
-          <p className="text-gray-500 mt-1">Управление профилями, комиссиями и доступом</p>
+          <p className="text-gray-500 mt-1">Управление профилями и массовые операции</p>
         </div>
-        <button
-          onClick={() => { setGeneratedPassword(''); setIsCreateModalOpen(true); }}
-          className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-medium transition-colors"
-        >
-          <UserPlus size={18} /> Добавить автора
-        </button>
+        <div className="flex gap-3">
+          {selectedIds.length > 0 && (
+            <button
+              onClick={handleBulkPasswordReset}
+              disabled={isSaving}
+              className="flex items-center gap-2 px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 font-medium transition-colors disabled:opacity-50"
+            >
+              {isSaving ? (
+                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+              ) : (
+                <Key size={18} />
+              )}
+              Сбросить пароли ({selectedIds.length})
+            </button>
+          )}
+          <button
+            onClick={() => { setGeneratedPassword(''); setIsCreateModalOpen(true); }}
+            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-medium transition-colors"
+          >
+            <UserPlus size={18} /> Добавить автора
+          </button>
+        </div>
       </div>
 
       {/* ПАНЕЛЬ ПОИСКА */}
@@ -233,6 +299,11 @@ export const Users = () => {
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="bg-gray-50 border-b border-gray-100">
+                <th className="p-4 w-10">
+                  <button onClick={toggleSelectAll} className="text-gray-400 hover:text-indigo-600 transition-colors">
+                    {selectedIds.length === users.length && users.length > 0 ? <CheckSquare size={20} className="text-indigo-600" /> : <Square size={20} />}
+                  </button>
+                </th>
                 <th className="p-4 text-sm font-semibold text-gray-600">Аккаунт</th>
                 <th className="p-4 text-sm font-semibold text-gray-600">Контакты</th>
                 <th className="p-4 text-sm font-semibold text-gray-600">Комиссия</th>
@@ -246,7 +317,12 @@ export const Users = () => {
                 const isDeleteAllowed = (new Date().getTime() - new Date(user.created_at).getTime()) < 72 * 60 * 60 * 1000;
 
                 return (
-                  <tr key={user.id} className={`transition-colors ${!user.is_active ? 'bg-red-50/30' : 'hover:bg-gray-50'}`}>
+                  <tr key={user.id} className={`transition-colors ${selectedIds.includes(user.id) ? 'bg-indigo-50/50' : !user.is_active ? 'bg-red-50/30' : 'hover:bg-gray-50'}`}>
+                    <td className="p-4">
+                      <button onClick={() => toggleSelectOne(user.id)} className="text-gray-400 hover:text-indigo-600 transition-colors">
+                        {selectedIds.includes(user.id) ? <CheckSquare size={20} className="text-indigo-600" /> : <Square size={20} />}
+                      </button>
+                    </td>
                     <td className="p-4">
                       <div className="flex items-center gap-2">
                         <p className={`font-bold ${!user.is_active ? 'text-gray-500 line-through' : 'text-gray-900'}`}>{user.username}</p>
@@ -261,30 +337,20 @@ export const Users = () => {
                     <td className="p-4">
                       <span className="bg-indigo-50 text-indigo-700 font-bold px-2 py-1 rounded text-sm">{user.commission_percent}%</span>
                     </td>
-                    {/* ДОБАВЛЕНО: Вывод стоимости аренды */}
                     <td className="p-4 text-sm font-medium text-gray-700">
                       {user.rent_rate > 0 ? `${user.rent_rate} ₽` : <span className="text-gray-400 text-xs">Не задана</span>}
                     </td>
                     <td className="p-4 text-sm font-bold text-gray-900">{user.balance.toLocaleString('ru-RU')} ₽</td>
                     <td className="p-4 text-right">
                       <div className="flex justify-end gap-1">
-                        {/* ДОБАВЛЕНО: Кнопка вызова окна аренды */}
-                        <button onClick={() => openRentModal(user)} className="p-1.5 text-blue-600 hover:bg-blue-100 rounded transition-colors" title="Списать аренду">
-                          <Wallet size={16} />
-                        </button>
-                        <button onClick={() => openEditModal(user)} className="p-1.5 text-indigo-600 hover:bg-indigo-100 rounded transition-colors" title="Профиль и настройки">
-                          <Edit2 size={16} />
-                        </button>
-                        <button onClick={() => openPasswordModal(user)} className="p-1.5 text-orange-600 hover:bg-orange-100 rounded transition-colors" title="Сменить пароль">
-                          <Key size={16} />
-                        </button>
+                        <button onClick={() => openRentModal(user)} className="p-1.5 text-blue-600 hover:bg-blue-100 rounded transition-colors" title="Списать аренду"><Wallet size={16} /></button>
+                        <button onClick={() => openEditModal(user)} className="p-1.5 text-indigo-600 hover:bg-indigo-100 rounded transition-colors" title="Профиль и настройки"><Edit2 size={16} /></button>
+                        <button onClick={() => openPasswordModal(user)} className="p-1.5 text-orange-600 hover:bg-orange-100 rounded transition-colors" title="Сменить пароль"><Key size={16} /></button>
                         <button onClick={() => handleToggleStatus(user)} className={`p-1.5 rounded transition-colors ${user.is_active ? 'text-red-500 hover:bg-red-100' : 'text-green-600 hover:bg-green-100'}`} title={user.is_active ? "Заблокировать" : "Разблокировать"}>
                           {user.is_active ? <UserX size={16} /> : <UserCheck size={16} />}
                         </button>
                         {isDeleteAllowed && (
-                          <button onClick={() => handleDeleteUser(user)} className="p-1.5 text-red-600 hover:bg-red-100 rounded transition-colors" title="Удалить навсегда (доступно 72ч)">
-                            <Trash2 size={16} />
-                          </button>
+                          <button onClick={() => handleDeleteUser(user)} className="p-1.5 text-red-600 hover:bg-red-100 rounded transition-colors" title="Удалить навсегда (доступно 72ч)"><Trash2 size={16} /></button>
                         )}
                       </div>
                     </td>
@@ -335,8 +401,10 @@ export const Users = () => {
               </div>
 
               <div className="flex gap-3 pt-4 border-t border-gray-100">
-                <button type="button" onClick={() => setIsCreateModalOpen(false)} className="flex-1 py-2 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg font-medium">Отмена</button>
-                <button type="submit" className="flex-1 py-2 text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg font-medium">Сохранить</button>
+                <button type="button" disabled={isSaving} onClick={() => setIsCreateModalOpen(false)} className="flex-1 py-2 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg font-medium disabled:opacity-50">Отмена</button>
+                <button type="submit" disabled={isSaving} className="flex-1 py-2 text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg font-medium flex items-center justify-center gap-2 disabled:bg-indigo-400">
+                  {isSaving ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>Сохранение...</> : 'Сохранить'}
+                </button>
               </div>
             </form>
           </div>
@@ -360,7 +428,6 @@ export const Users = () => {
                   <label className="block text-sm font-medium text-gray-700 mb-1">Комиссия точки (%)</label>
                   <input required type="number" className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:border-indigo-500" value={editData.commission_percent} onChange={(e) => setEditData({...editData, commission_percent: parseFloat(e.target.value)})} />
                 </div>
-                {/* ДОБАВЛЕНО: Поле для изменения стоимости аренды */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Аренда полки (₽)</label>
                   <input required type="number" min="0" className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:border-indigo-500" value={editData.rent_rate} onChange={(e) => setEditData({...editData, rent_rate: parseFloat(e.target.value) || 0})} />
@@ -380,15 +447,17 @@ export const Users = () => {
               </div>
 
               <div className="flex gap-3 pt-4 border-t border-gray-100">
-                <button type="button" onClick={() => setIsEditModalOpen(false)} className="flex-1 py-2 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg font-medium">Отмена</button>
-                <button type="submit" className="flex-1 py-2 text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg font-medium">Сохранить</button>
+                <button type="button" disabled={isSaving} onClick={() => setIsEditModalOpen(false)} className="flex-1 py-2 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg font-medium disabled:opacity-50">Отмена</button>
+                <button type="submit" disabled={isSaving} className="flex-1 py-2 text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg font-medium flex items-center justify-center gap-2 disabled:bg-indigo-400">
+                  {isSaving ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>Сохранение...</> : 'Сохранить'}
+                </button>
               </div>
             </form>
           </div>
         </div>
       )}
 
-      {/* ДОБАВЛЕНО: МОДАЛЬНОЕ ОКНО СПИСАНИЯ АРЕНДЫ */}
+      {/* МОДАЛЬНОЕ ОКНО СПИСАНИЯ АРЕНДЫ */}
       {isRentModalOpen && selectedUser && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-xl">
@@ -407,16 +476,18 @@ export const Users = () => {
 
             <div className="space-y-3">
               <button
+                disabled={isSaving}
                 onClick={() => handleChargeRent('balance')}
-                className="w-full py-3 px-4 bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100 rounded-xl font-medium transition-colors text-left flex flex-col"
+                className="w-full py-3 px-4 bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100 rounded-xl font-medium transition-colors text-left flex flex-col disabled:opacity-50"
               >
                 <span className="block text-base">Списать со счета продавца</span>
                 <span className="block text-xs font-normal opacity-80 mt-0.5">Баланс автора будет уменьшен на сумму аренды</span>
               </button>
 
               <button
+                disabled={isSaving}
                 onClick={() => handleChargeRent('own_funds')}
-                className="w-full py-3 px-4 bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 rounded-xl font-medium transition-colors text-left flex flex-col"
+                className="w-full py-3 px-4 bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 rounded-xl font-medium transition-colors text-left flex flex-col disabled:opacity-50"
               >
                 <span className="block text-base">Оплата со своих средств</span>
                 <span className="block text-xs font-normal opacity-80 mt-0.5">Учитывается в финансах, но баланс останется без изменений</span>
@@ -424,7 +495,7 @@ export const Users = () => {
             </div>
 
             <div className="mt-6 pt-4 border-t border-gray-100">
-              <button onClick={() => setIsRentModalOpen(false)} className="w-full py-2 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg font-medium">
+              <button disabled={isSaving} onClick={() => setIsRentModalOpen(false)} className="w-full py-2 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg font-medium disabled:opacity-50">
                 Отмена
               </button>
             </div>
@@ -460,29 +531,11 @@ export const Users = () => {
               </div>
 
               <div className="flex gap-3 pt-4 border-t border-gray-100">
-                  <button
-                    type="button"
-                    disabled={isSaving}
-                    onClick={() => setIsEditModalOpen(false)}
-                    className="flex-1 py-2 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg font-medium disabled:opacity-50"
-                  >
-                    Отмена
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={isSaving}
-                    className="flex-1 py-2 text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg font-medium flex items-center justify-center gap-2 disabled:bg-indigo-400"
-                  >
-                    {isSaving ? (
-                      <>
-                        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                        Сохранение...
-                      </>
-                    ) : (
-                      'Сохранить'
-                    )}
-                  </button>
-                </div>
+                <button type="button" disabled={isSaving} onClick={() => setIsPasswordModalOpen(false)} className="flex-1 py-2 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg font-medium disabled:opacity-50">Отмена</button>
+                <button type="submit" disabled={isSaving || !generatedPassword} className="flex-1 py-2 text-white bg-orange-500 hover:bg-orange-600 disabled:bg-orange-300 rounded-lg font-medium flex items-center justify-center gap-2">
+                  {isSaving ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>Сохранение...</> : 'Сохранить'}
+                </button>
+              </div>
             </form>
           </div>
         </div>
