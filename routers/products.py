@@ -207,11 +207,19 @@ async def preview_products_import(
         if not name or not external_id:
             continue
 
+        price_str = price_raw.replace(" ", "").replace("\xa0", "").replace(",",
+                                                                           ".")
         try:
-            price = float(price_raw.replace(" ", "").replace(",", "."))
-            stock = int(float(stock_raw.replace(" ", "").replace(",", ".")))
+            price = float(price_str) if price_str else 0.0
         except ValueError:
-            price, stock = 0.0, 0
+            price = 0.0
+
+        stock_str = stock_raw.replace(" ", "").replace("\xa0", "").replace(",",
+                                                                           ".")
+        try:
+            stock = int(float(stock_str)) if stock_str else 0
+        except ValueError:
+            stock = 0
 
         sku = external_id
         db_product = session.exec(

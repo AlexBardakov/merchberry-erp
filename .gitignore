@@ -28,6 +28,7 @@ __pycache__/
 venv/
 .env
 database.db
+init_admin.py
 
 # Node / Vite
 node_modules/

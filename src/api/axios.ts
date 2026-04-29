@@ -3,7 +3,7 @@ import axios from 'axios';
 
 // Создаем экземпляр axios с базовым URL нашего бэкенда
 const apiClient = axios.create({
-  baseURL: 'http://127.0.0.1:8000/api', // Здесь потом будет реальный IP сервера
+  baseURL: '/api',
   headers: {
     'Content-Type': 'application/json',
   },
