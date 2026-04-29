@@ -1,7 +1,9 @@
 # Файл: main.py
 import json
+import os
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from apscheduler.schedulers.background import BackgroundScheduler
 from sqlmodel import Session, select
@@ -10,10 +12,14 @@ from models import User, AuditLog, Product
 from routers.vk_bot import send_vk_message_sync
 
 from database import create_db_and_tables, engine
-from routers import auth_router, users, products, transactions, analytics, audit, vk_bot
+from routers import auth_router, users, products, transactions, analytics, \
+    audit, vk_bot, payouts
 from routers.transactions import run_b2b_sync  # Импортируем нашу функцию
 
 app = FastAPI(title="Merchberry ERP API")
+
+os.makedirs("uploads/payouts", exist_ok=True)
+app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 app.add_middleware(
     CORSMiddleware,
@@ -133,3 +139,4 @@ app.include_router(transactions.router)
 app.include_router(analytics.router)
 app.include_router(audit.router)
 app.include_router(vk_bot.router)
+app.include_router(payouts.router)

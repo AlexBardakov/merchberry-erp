@@ -178,3 +178,31 @@ class WidgetStats(BaseModel):
 
 class BulkPasswordResetRequest(BaseModel):
     user_ids: List[int]
+
+
+class PayoutRequestCreate(BaseModel):
+    amount: float
+    comment: Optional[str] = None
+
+
+class PayoutRequestAction(BaseModel):
+    action: str  # "approve" или "reject"
+    admin_comment: Optional[str] = None
+
+
+class PayoutRequestRead(BaseModel):
+    id: int
+    seller_id: int
+    amount: float
+    comment: Optional[str] = None
+    status: str
+    admin_comment: Optional[str] = None
+    proof_file_url: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+    # Дополнительные поля для удобного отображения в админке
+    seller_username: Optional[str] = None
+    seller_full_name: Optional[str] = None
+    seller_balance: Optional[float] = None
+    seller_notes: Optional[str] = None

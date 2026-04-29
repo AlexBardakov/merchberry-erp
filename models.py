@@ -98,3 +98,25 @@ class AuditLog(SQLModel, table=True):
     # Храним изменения в JSON, чтобы объединять цену и остаток в одной записи
     # Пример: {"stock": {"old": 5, "new": 10}, "base_price": {"old": 1000, "new": 1200}}
     changes: dict = Field(default_factory=dict, sa_column=Column(JSON))
+
+
+# --- ТАБЛИЦА: ЗАПРОСЫ НА ВЫПЛАТЫ ---
+class PayoutRequest(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    seller_id: int = Field(foreign_key="user.id", index=True)
+
+    amount: float
+    comment: Optional[
+        str] = None  # Комментарий от автора (например, новые реквизиты)
+
+    status: str = Field(default="pending")  # pending, approved, rejected
+    admin_comment: Optional[str] = None  # Причина отказа или заметка админа
+    proof_file_url: Optional[
+        str] = None  # Ссылка на загруженный файл-доказательство
+
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc))
+
+    seller: Optional[User] = Relationship()
