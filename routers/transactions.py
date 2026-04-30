@@ -382,25 +382,35 @@ def run_b2b_sync(session: Session, force_full: bool = False):
             price = float(item.get("price", 0))
             count = int(float(item.get("amount", 1)))
 
-            product = session.exec(
-                select(Product).where(Product.sku == b2b_good_id)).first()
+            # Ищем проданный товар по его SKU
+            product = session.exec(select(Product).where(Product.sku == b2b_good_id)).first()
             seller_id = product.seller_id if product else None
 
+            # Если товар не найден в базе, берем имя из чека
             if product:
                 name = product.name
             else:
                 raw_name = item.get("name", "Неизвестный товар")
                 name = f"{raw_name} [ID: {b2b_good_id}]"
 
-            # ОБНОВЛЕНИЕ СКЛАДА
+            # ОБНОВЛЕНИЕ СКЛАДА С УЧЕТОМ БЛОКОВ
             if product and not is_first_sync:
-                if is_return:
-                    product.stock += count  # Плюсуем (возвращаем товар на склад)
-                else:
-                    product.stock = max(0,
-                                        product.stock - count)  # Минусуем (продажа)
-                session.add(product)
+                # Если товар вложенный, обновляем остаток у РОДИТЕЛЯ
+                target_stock_product = product
+                if product.parent_id:
+                    parent_product = session.get(Product, product.parent_id)
+                    if parent_product:
+                        target_stock_product = parent_product
 
+                # Меняем остаток у целевого товара (главного или индивидуального)
+                if is_return:
+                    target_stock_product.stock += count  # Плюсуем (возвращаем товар на склад)
+                else:
+                    target_stock_product.stock = max(0, target_stock_product.stock - count)  # Минусуем (продажа)
+
+                session.add(target_stock_product)
+
+            # Формируем финансовые данные для транзакции
             if seller_id not in grouped_data:
                 grouped_data[seller_id] = {
                     "full_amount": 0.0, "profit": 0.0, "commission": 0.0,
@@ -412,12 +422,12 @@ def run_b2b_sync(session: Session, force_full: bool = False):
             total_item_price = (price * count) * sign
 
             grouped_data[seller_id]["full_amount"] += total_item_price
+            # В чек пишем оригинальное имя проданного товара (даже если он вложенный)
             grouped_data[seller_id]["items"].append(f"{name} ({count} шт.)")
 
             if seller_id:
                 seller = session.get(User, seller_id)
-                commission_rate = seller.commission_percent if (
-                            seller and seller.is_active) else 15.0
+                commission_rate = seller.commission_percent if (seller and seller.is_active) else 15.0
             else:
                 commission_rate = 15.0
 

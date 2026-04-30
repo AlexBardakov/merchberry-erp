@@ -53,6 +53,8 @@ class Product(SQLModel, table=True):
     is_obsolete: bool = Field(default=False)
     seller: Optional[User] = Relationship(back_populates="products")
 
+    parent_id: Optional[int] = Field(default=None, foreign_key="product.id", index=True)
+
 # --- ТАБЛИЦА: ТРАНЗАКЦИИ ---
 class Transaction(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)

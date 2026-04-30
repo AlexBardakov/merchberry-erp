@@ -1,6 +1,6 @@
 // src/pages/Inventory.tsx
 import React, { useState, useEffect } from 'react';
-import { UploadCloud, CheckCircle, AlertTriangle, Package, Search, Edit2, Save, X, Archive, RefreshCw } from 'lucide-react';
+import { UploadCloud, CheckCircle, AlertTriangle, Package, Search, Edit2, Save, X, Archive, RefreshCw, ChevronDown, ChevronRight, Unlink } from 'lucide-react';
 import apiClient from '../api/axios';
 
 // Типизация
@@ -12,6 +12,7 @@ interface Product {
   stock: number;
   seller_id: number | null;
   is_obsolete?: boolean;
+  parent_id: number | null;
 }
 
 interface Seller {
@@ -50,6 +51,23 @@ export const Inventory = () => {
   // Инлайн-редактирование
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editForm, setEditForm] = useState({ name: '', base_price: 0, stock: 0 });
+
+  // --- Блоки (аккордеон) и исключение ---
+  const [expandedBlocks, setExpandedBlocks] = useState<number[]>([]);
+
+  const toggleBlock = (id: number) => {
+    setExpandedBlocks(prev => prev.includes(id) ? prev.filter(b => b !== id) : [...prev, id]);
+  };
+
+  const handleUnmerge = async (childId: number) => {
+    if (!window.confirm('Вы уверены, что хотите исключить этот товар из блока? Его остаток станет нулевым.')) return;
+    try {
+      await apiClient.post('/products/unmerge', { child_id: childId });
+      fetchProducts();
+    } catch (error) {
+      alert("Ошибка при исключении товара из блока");
+    }
+  };
 
   // Массовые действия
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
@@ -268,6 +286,21 @@ export const Inventory = () => {
       alert("Произошла ошибка при массовой привязке");
     }
   };
+
+// --- ПОДГОТОВКА ДАННЫХ ДЛЯ ТАБЛИЦЫ (Группировка блоков) ---
+  const parentIdsInView = new Set(products.map(p => p.id));
+
+  // Главные товары - это те, у которых нет parent_id, ЛИБО их родитель не загрузился на текущей странице
+  const topLevelProducts = products.filter(p => !p.parent_id || !parentIdsInView.has(p.parent_id));
+
+  // Словарь детей для быстрого доступа
+  const childrenMap = products.reduce((acc, p) => {
+    if (p.parent_id && parentIdsInView.has(p.parent_id)) {
+      if (!acc[p.parent_id]) acc[p.parent_id] = [];
+      acc[p.parent_id].push(p);
+    }
+    return acc;
+  }, {} as Record<number, Product[]>);
 
   return (
     <div className="space-y-6">
@@ -512,91 +545,132 @@ export const Inventory = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {products.map((product) => {
+                {topLevelProducts.map((product) => {
                 const isEditing = editingId === product.id;
                 const isSelected = selectedIds.includes(product.id);
+                const blockChildren = childrenMap[product.id] || [];
+                const hasChildren = blockChildren.length > 0;
+                const isExpanded = expandedBlocks.includes(product.id);
 
                 return (
-                <tr key={product.id} className={`transition-colors ${product.is_obsolete ? 'bg-gray-50/70' : 'hover:bg-gray-50'} ${isSelected ? 'bg-indigo-50/30' : ''}`}>
-                  {isAdmin && (
-                    <td className="p-4">
-                      <input
-                        type="checkbox"
-                        className="rounded text-indigo-600 focus:ring-indigo-500"
-                        checked={isSelected}
-                        onChange={(e) => handleSelectOne(product.id, e.target.checked)}
-                      />
-                    </td>
-                  )}
-                  <td className="p-4 text-sm text-gray-500">{product.sku || '—'}</td>
-
-                  {/* ИНЛАЙН РЕДАКТИРОВАНИЕ */}
-                  {isEditing ? (
-                    <>
-                      <td className="p-4">
-                        <input type="text" className="w-full border border-indigo-300 rounded px-2 py-1 text-sm outline-none" value={editForm.name} onChange={e => setEditForm({...editForm, name: e.target.value})} />
-                      </td>
-                      <td className="p-4">
-                        <input type="number" className="w-24 border border-indigo-300 rounded px-2 py-1 text-sm outline-none" value={editForm.base_price} onChange={e => setEditForm({...editForm, base_price: parseFloat(e.target.value)})} />
-                      </td>
-                      <td className="p-4">
-                        <input type="number" className="w-16 border border-indigo-300 rounded px-2 py-1 text-sm outline-none" value={editForm.stock} onChange={e => setEditForm({...editForm, stock: parseInt(e.target.value)})} />
-                      </td>
-                    </>
-                  ) : (
-                    <>
-                      <td className="p-4 text-sm font-medium text-gray-900">
-                        {product.name}
-                        {product.is_obsolete && <span className="ml-2 text-[10px] bg-gray-200 text-gray-500 px-2 py-0.5 rounded-full uppercase">Устаревшее</span>}
-                      </td>
-                      <td className="p-4 text-sm text-gray-600">{product.base_price.toLocaleString('ru-RU')}</td>
-                      <td className="p-4">
-                        <span className={`inline-flex px-2 py-1 rounded-md text-xs font-bold ${product.stock > 0 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                          {product.stock} шт.
-                        </span>
-                      </td>
-                    </>
-                  )}
-
-                  {isAdmin && (
-                    <td className="p-4">
-                      <div className="flex items-center gap-2">
-                        {!product.seller_id && <AlertTriangle size={14} className="text-orange-500" />}
-                        <select
-                          className={`text-sm rounded-lg px-2 py-1 outline-none ${product.seller_id ? 'bg-transparent hover:bg-gray-100' : 'bg-orange-50 border border-orange-200 text-orange-700'}`}
-                          value={product.seller_id || ""}
-                          onChange={(e) => handleAssignSeller(product.id, e.target.value)}
-                        >
-                          <option value="" disabled>Ничей (Привязать)</option>
-                          {sellers.map(s => (
-                            <option key={s.id} value={s.id}>{s.username}</option>
-                          ))}
-                        </select>
-                      </div>
-                    </td>
-                  )}
-
-                  {isAdmin && (
-                    <td className="p-4 text-right">
-                      {isEditing ? (
-                        <div className="flex justify-end gap-1">
-                          <button onClick={() => saveEditing(product.id)} className="p-1.5 text-white bg-green-500 hover:bg-green-600 rounded shadow-sm"><Save size={16} /></button>
-                          <button onClick={() => setEditingId(null)} className="p-1.5 text-gray-600 bg-gray-200 hover:bg-gray-300 rounded shadow-sm"><X size={16} /></button>
-                        </div>
-                      ) : (
-                        <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 hover:opacity-100 transition-opacity" style={{ opacity: 1 }}>
-                          <button onClick={() => startEditing(product)} className="p-1.5 text-indigo-600 hover:bg-indigo-100 rounded transition-colors" title="Редактировать">
-                            <Edit2 size={16} />
-                          </button>
-                          <button onClick={() => toggleArchive(product)} className={`p-1.5 rounded transition-colors ${product.is_obsolete ? 'text-green-600 hover:bg-green-100' : 'text-red-500 hover:bg-red-100'}`} title={product.is_obsolete ? "Восстановить" : "В архив"}>
-                            {product.is_obsolete ? <RefreshCw size={16} /> : <Archive size={16} />}
-                          </button>
-                        </div>
+                  <React.Fragment key={product.id}>
+                    {/* СТРОКА ГЛАВНОГО ТОВАРА */}
+                    <tr className={`transition-colors ${product.is_obsolete ? 'bg-gray-50/70' : 'hover:bg-gray-50'} ${isSelected ? 'bg-indigo-50/30' : ''}`}>
+                      {isAdmin && (
+                        <td className="p-4">
+                          <input
+                            type="checkbox"
+                            className="rounded text-indigo-600 focus:ring-indigo-500"
+                            checked={isSelected}
+                            onChange={(e) => handleSelectOne(product.id, e.target.checked)}
+                          />
+                        </td>
                       )}
-                    </td>
-                  )}
-                </tr>
-              )})}
+                      <td className="p-4 text-sm text-gray-500">{product.sku || '—'}</td>
+
+                      {/* ИНЛАЙН РЕДАКТИРОВАНИЕ */}
+                      {isEditing ? (
+                        <>
+                          <td className="p-4">
+                            <input type="text" className="w-full border border-indigo-300 rounded px-2 py-1 text-sm outline-none" value={editForm.name} onChange={e => setEditForm({...editForm, name: e.target.value})} />
+                          </td>
+                          <td className="p-4">
+                            <input type="number" className="w-24 border border-indigo-300 rounded px-2 py-1 text-sm outline-none" value={editForm.base_price} onChange={e => setEditForm({...editForm, base_price: parseFloat(e.target.value)})} />
+                          </td>
+                          <td className="p-4">
+                            <input type="number" className="w-16 border border-indigo-300 rounded px-2 py-1 text-sm outline-none" value={editForm.stock} onChange={e => setEditForm({...editForm, stock: parseInt(e.target.value)})} />
+                          </td>
+                        </>
+                      ) : (
+                        <>
+                          <td className="p-4 text-sm font-medium text-gray-900 flex items-center gap-2">
+                            {hasChildren && (
+                              <button onClick={() => toggleBlock(product.id)} className="p-1 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition-colors">
+                                {isExpanded ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
+                              </button>
+                            )}
+                            {product.name}
+                            {hasChildren && <span className="text-[10px] bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full uppercase font-bold tracking-wider">Блок</span>}
+                            {product.is_obsolete && <span className="text-[10px] bg-gray-200 text-gray-500 px-2 py-0.5 rounded-full uppercase">В архиве</span>}
+                          </td>
+                          <td className="p-4 text-sm text-gray-600">{product.base_price.toLocaleString('ru-RU')}</td>
+                          <td className="p-4">
+                            <span className={`inline-flex px-2 py-1 rounded-md text-xs font-bold ${product.stock > 0 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                              {product.stock} шт.
+                            </span>
+                          </td>
+                        </>
+                      )}
+
+                      {isAdmin && (
+                        <td className="p-4">
+                          <div className="flex items-center gap-2">
+                            {!product.seller_id && <AlertTriangle size={14} className="text-orange-500" />}
+                            <select
+                              className={`text-sm rounded-lg px-2 py-1 outline-none ${product.seller_id ? 'bg-transparent hover:bg-gray-100' : 'bg-orange-50 border border-orange-200 text-orange-700'}`}
+                              value={product.seller_id || ""}
+                              onChange={(e) => handleAssignSeller(product.id, e.target.value)}
+                            >
+                              <option value="" disabled>Ничей (Привязать)</option>
+                              {sellers.map(s => (
+                                <option key={s.id} value={s.id}>{s.username}</option>
+                              ))}
+                            </select>
+                          </div>
+                        </td>
+                      )}
+
+                      {isAdmin && (
+                        <td className="p-4 text-right">
+                          {isEditing ? (
+                            <div className="flex justify-end gap-1">
+                              <button onClick={() => saveEditing(product.id)} className="p-1.5 text-white bg-green-500 hover:bg-green-600 rounded shadow-sm"><Save size={16} /></button>
+                              <button onClick={() => setEditingId(null)} className="p-1.5 text-gray-600 bg-gray-200 hover:bg-gray-300 rounded shadow-sm"><X size={16} /></button>
+                            </div>
+                          ) : (
+                            <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 hover:opacity-100 transition-opacity" style={{ opacity: 1 }}>
+                              <button onClick={() => startEditing(product)} className="p-1.5 text-indigo-600 hover:bg-indigo-100 rounded transition-colors" title="Редактировать">
+                                <Edit2 size={16} />
+                              </button>
+                              <button onClick={() => toggleArchive(product)} className={`p-1.5 rounded transition-colors ${product.is_obsolete ? 'text-green-600 hover:bg-green-100' : 'text-red-500 hover:bg-red-100'}`} title={product.is_obsolete ? "Восстановить" : "В архив"}>
+                                {product.is_obsolete ? <RefreshCw size={16} /> : <Archive size={16} />}
+                              </button>
+                            </div>
+                          )}
+                        </td>
+                      )}
+                    </tr>
+
+                    {/* СТРОКИ ВЛОЖЕННЫХ ТОВАРОВ (Если блок развернут) */}
+                    {isExpanded && blockChildren.map(child => (
+                      <tr key={child.id} className="bg-indigo-50/20 border-l-4 border-indigo-400 group">
+                        {isAdmin && <td className="p-4"></td>} {/* Пустой чекбокс */}
+                        <td className="p-4 text-sm text-gray-400 pl-8 font-mono">↳ {child.sku || '—'}</td>
+                        <td className="p-4 text-sm text-gray-700 font-medium">
+                          {child.name}
+                          {child.is_obsolete && <span className="ml-2 text-[10px] bg-gray-200 text-gray-500 px-2 py-0.5 rounded-full uppercase">В архиве</span>}
+                        </td>
+                        <td className="p-4 text-sm text-gray-400 italic">Смотри выше</td>
+                        <td className="p-4 text-sm text-gray-400 italic">Смотри выше</td>
+                        {isAdmin && (
+                          <td className="p-4 text-sm text-gray-500">
+                            <span className="bg-white border border-gray-200 px-2 py-1 rounded text-xs">Вложенный</span>
+                          </td>
+                        )}
+                        {isAdmin && (
+                          <td className="p-4 text-right">
+                            <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <button onClick={() => handleUnmerge(child.id)} className="p-1.5 text-orange-600 bg-white hover:bg-orange-100 border border-orange-200 rounded transition-colors flex items-center gap-1 shadow-sm" title="Исключить из блока">
+                                <Unlink size={14} /> <span className="text-xs font-bold">Исключить</span>
+                              </button>
+                            </div>
+                          </td>
+                        )}
+                      </tr>
+                    ))}
+                  </React.Fragment>
+                );
+              })}
             </tbody>
           </table>
         )}
@@ -620,7 +694,7 @@ export const Inventory = () => {
               <h2 className="text-xl font-bold text-gray-900">Слияние товаров</h2>
               <button onClick={() => {setIsMergeModalOpen(false); setMergeTargetId(null);}} className="text-gray-400 hover:text-gray-600"><X size={24}/></button>
             </div>
-            <p className="text-sm text-gray-500 mb-4">Выберите <strong>основной</strong> товар. Остатки остальных позиций прибавятся к нему, а сами дубликаты будут отправлены в архив.</p>
+            <p className="text-sm text-gray-500 mb-4">Выберите <strong>основной</strong> товар. Остатки остальных позиций прибавятся к нему, а сами дубликаты станут вложенными товарами в этом блоке.</p>
 
             <div className="space-y-2 mb-6 max-h-[50vh] overflow-y-auto pr-2 custom-scrollbar">
               {products.filter(p => selectedIds.includes(p.id)).map(p => (

@@ -136,6 +136,19 @@ def get_dashboard_summary(
 
     days_diff = (end_date - start_date).days
 
+    # --- НОВОЕ: Создаем словарь для быстрой подмены имен в Топ-5 (агрегация блоков) ---
+    all_products = session.exec(select(Product)).all()
+    product_name_mapping = {}
+
+    # Проходим по всем товарам. Если есть родитель - запоминаем имя родителя, иначе свое.
+    for p in all_products:
+        if p.parent_id:
+            parent = next((parent_prod for parent_prod in all_products if parent_prod.id == p.parent_id), None)
+            product_name_mapping[p.name] = parent.name if parent else p.name
+        else:
+            product_name_mapping[p.name] = p.name
+    # ---------------------------------------------------------------------------------
+
     for tx in transactions:
         total_full += tx.full_amount
         total_profit += tx.amount
@@ -161,10 +174,12 @@ def get_dashboard_summary(
 
             # Лидеры продаж: Игнорируем "ничейные" товары
             if tx.seller_id is not None:
-                matches = re.findall(r"(.+?)\s\((\d+)\sшт\.\)",
-                                     tx.product_identifier)
+                matches = re.findall(r"(.+?)\s\((\d+)\sшт\.\)", tx.product_identifier)
                 for name, count_str in matches:
-                    product_counts[name.strip()] += int(count_str)
+                    clean_name = name.strip()
+                    # Подменяем имя на имя Главного товара (если он в блоке)
+                    final_name = product_name_mapping.get(clean_name, clean_name)
+                    product_counts[final_name] += int(count_str)
 
     chart_data = []
     if days_diff <= 14:

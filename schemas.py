@@ -74,6 +74,10 @@ class ProductRead(BaseModel):
     stock: int
     seller_id: Optional[int] = None
     is_obsolete: bool
+    parent_id: Optional[int] = None
+
+class ProductUnmergeRequest(BaseModel):
+    child_id: int
 
 class UserUpdate(BaseModel):
     full_name: Optional[str] = None

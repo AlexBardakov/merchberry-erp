@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from database import get_session
 from models import Product, User
 from auth import get_current_user, get_current_admin, get_password_hash
-from schemas import ProductDiff, ImportConfirmRequest, ProductUpdateRequest, ProductRead
+from schemas import ProductDiff, ImportConfirmRequest, ProductUpdateRequest, ProductRead, ProductUnmergeRequest
 from utils import create_audit_log
 
 router = APIRouter(prefix="/api/products", tags=["Products"])
@@ -154,7 +154,6 @@ async def preview_products_import(
         session: Session = Depends(get_session)
 ):
     content = await file.read()
-
     text = ""
     for encoding in ['utf-8-sig', 'utf-8', 'windows-1251', 'cp1251']:
         try:
@@ -164,111 +163,118 @@ async def preview_products_import(
             continue
 
     if not text:
-        raise HTTPException(status_code=400,
-                            detail="Не удалось прочитать файл. Проверьте кодировку.")
+        raise HTTPException(status_code=400, detail="Не удалось прочитать файл. Проверьте кодировку.")
 
     first_line = text.split('\n')[0]
     delimiter = ';' if ';' in first_line else ','
-
     reader = csv.DictReader(io.StringIO(text), delimiter=delimiter)
 
-    # 1. Строгая проверка обязательных столбцов
-    required_columns = [
-        "Наименование",
-        "Группа товаров",
-        "Цены отпускные. Отпускные розничные",
-        "Все склады. Общий остаток",
-        "Внешние коды. ID из Бизнес.ру"
-    ]
-
+    required_columns = ["Наименование", "Группа товаров", "Цены отпускные. Отпускные розничные", "Все склады. Общий остаток", "Внешние коды. ID из Бизнес.ру"]
     if not reader.fieldnames:
         raise HTTPException(status_code=400, detail="Файл пуст или не содержит заголовков.")
 
-    # Очищаем заголовки от возможных пробелов по краям
     actual_columns = [col.strip() for col in reader.fieldnames if col]
-
     missing_columns = [col for col in required_columns if col not in actual_columns]
-
     if missing_columns:
         missing_cols_str = ", ".join(f"'{col}'" for col in missing_columns)
-        raise HTTPException(
-            status_code=400,
-            detail=f"Отсутствуют обязательные столбцы для выгрузки: {missing_cols_str}. Проверьте файл."
-        )
+        raise HTTPException(status_code=400, detail=f"Отсутствуют обязательные столбцы для выгрузки: {missing_cols_str}. Проверьте файл.")
 
     all_users = session.exec(select(User)).all()
     user_id_to_name = {u.id: u.username for u in all_users}
+    existing_usernames = {u.username for u in all_users}
 
-    new_products, changed_products, unchanged_products = [], [], []
-    conflicts = []  # ДОБАВЛЕНО: Массив для конфликтов
-    csv_authors = set()
-
+    # Читаем все строки CSV
+    csv_items = []
     for row in reader:
         clean_row = {k.strip(): v for k, v in row.items() if k}
-
         name = str(clean_row.get("Наименование", "")).strip()
         group = str(clean_row.get("Группа товаров", "")).strip()
-        price_raw = str(clean_row.get("Цены отпускные. Отпускные розничные", "0")).strip()
-        stock_raw = str(clean_row.get("Все склады. Общий остаток", "0")).strip()
-        external_id = str(clean_row.get("Внешние коды. ID из Бизнес.ру", "")).strip()
+        sku = str(clean_row.get("Внешние коды. ID из Бизнес.ру", "")).strip()
 
-        if not name or not external_id:
-            continue
+        if not name or not sku: continue
 
-        price_str = price_raw.replace(" ", "").replace("\xa0", "").replace(",",
-                                                                           ".")
-        try:
-            price = float(price_str) if price_str else 0.0
-        except ValueError:
-            price = 0.0
+        price_str = str(clean_row.get("Цены отпускные. Отпускные розничные", "0")).strip().replace(" ", "").replace("\xa0", "").replace(",", ".")
+        stock_str = str(clean_row.get("Все склады. Общий остаток", "0")).strip().replace(" ", "").replace("\xa0", "").replace(",", ".")
 
-        stock_str = stock_raw.replace(" ", "").replace("\xa0", "").replace(",",
-                                                                           ".")
+        price = float(price_str) if price_str else 0.0
         try:
             stock = int(float(stock_str)) if stock_str else 0
         except ValueError:
             stock = 0
 
-        sku = external_id
-        db_product = session.exec(
-            select(Product).where(Product.sku == sku)).first()
+        csv_items.append({"sku": sku, "name": name, "price": price, "stock": stock, "seller_name": group})
 
-        # ДОБАВЛЕНО: Проверка конфликтов и сбор реальных авторов из CSV
-        if db_product and db_product.seller_id is not None:
-            current_author_name = user_id_to_name.get(db_product.seller_id,
-                                                      "Неизвестно")
-            csv_author_name = group if group else "Без автора"
+    # Достаем все затронутые товары из БД для быстрой проверки
+    skus = [item["sku"] for item in csv_items]
+    db_products_list = session.exec(select(Product).where(Product.sku.in_(skus))).all()
+    db_products_map = {p.sku: p for p in db_products_list}
 
-            if current_author_name != csv_author_name and group:
-                conflicts.append({
-                    "product_name": db_product.name,
-                    "current_author": current_author_name,
-                    "csv_author": csv_author_name
-                })
+    blocks = {}
+    csv_authors = set()
+    conflicts = []
+
+    # АГРЕГАЦИЯ ОСТАТКОВ И ЦЕН ПО БЛОКАМ
+    for item in csv_items:
+        if item["seller_name"]: csv_authors.add(item["seller_name"])
+        db_p = db_products_map.get(item["sku"])
+
+        # Конфликты авторов
+        if db_p and db_p.seller_id is not None:
+            current_author = user_id_to_name.get(db_p.seller_id, "Неизвестно")
+            csv_author = item["seller_name"] if item["seller_name"] else "Без автора"
+            if current_author != csv_author and item["seller_name"]:
+                conflicts.append({"product_name": db_p.name, "current_author": current_author, "csv_author": csv_author})
+
+        # Если это ребенок, агрегируем данные на его родителя
+        if db_p:
+            main_id = db_p.parent_id if db_p.parent_id else db_p.id
         else:
-            # Если товар НОВЫЙ или НИЧЕЙНЫЙ, тогда нам реально нужен этот автор для привязки
-            if group:
-                csv_authors.add(group)
+            main_id = f"new_{item['sku']}"
 
-        diff = ProductDiff(
-            sku=sku,
-            name=name,
-            old_price=db_product.base_price if db_product else 0.0,
-            new_price=price,
-            old_stock=db_product.stock if db_product else 0,
-            new_stock=stock,
-            seller_name=group if group else None
-        )
+        if main_id not in blocks:
+            blocks[main_id] = {"stock": 0, "price": item["price"], "seller_name": item["seller_name"], "db_main": session.get(Product, main_id) if isinstance(main_id, int) else None}
 
-        if not db_product:
+        # Складываем остатки всех товаров блока
+        blocks[main_id]["stock"] += item["stock"]
+        # Последняя считанная цена перекрывает предыдущие
+        blocks[main_id]["price"] = item["price"]
+        if item["seller_name"]: blocks[main_id]["seller_name"] = item["seller_name"]
+
+    new_products, changed_products, unchanged_products = [], [], []
+
+    # 1. Генерируем изменения для Главных и Новых товаров
+    for main_id, b_data in blocks.items():
+        if isinstance(main_id, str) and main_id.startswith("new_"):
+            sku = main_id.replace("new_", "")
+            orig_item = next(i for i in csv_items if i["sku"] == sku)
+            diff = ProductDiff(sku=sku, name=orig_item["name"], old_price=0.0, new_price=b_data["price"], old_stock=0, new_stock=b_data["stock"], seller_name=b_data["seller_name"])
             new_products.append(diff)
-        elif db_product.base_price != price or db_product.stock != stock or db_product.name != name:
-            changed_products.append(diff)
         else:
-            unchanged_products.append(diff)
+            db_main = b_data["db_main"]
+            main_csv_item = next((i for i in reversed(csv_items) if i["sku"] == db_main.sku), None)
+            new_name = main_csv_item["name"] if main_csv_item else db_main.name
 
-    existing_users = session.exec(select(User).where(User.username.in_(list(csv_authors)))).all()
-    existing_usernames = {u.username for u in existing_users}
+            price_changed = db_main.base_price != b_data["price"]
+            stock_changed = db_main.stock != b_data["stock"]
+            name_changed = db_main.name != new_name
+            seller_changed = (db_main.seller_id is None and b_data["seller_name"])
+
+            if price_changed or stock_changed or name_changed or seller_changed:
+                diff = ProductDiff(sku=db_main.sku, name=new_name, old_price=db_main.base_price, new_price=b_data["price"], old_stock=db_main.stock, new_stock=b_data["stock"], seller_name=b_data["seller_name"])
+                changed_products.append(diff)
+            else:
+                diff = ProductDiff(sku=db_main.sku, name=db_main.name, old_price=db_main.base_price, new_price=db_main.base_price, old_stock=db_main.stock, new_stock=db_main.stock, seller_name=b_data["seller_name"])
+                unchanged_products.append(diff)
+
+    # 2. Генерируем изменения для Вложенных товаров (ТОЛЬКО если изменилось имя)
+    for item in csv_items:
+        db_p = db_products_map.get(item["sku"])
+        if db_p and db_p.parent_id:
+            if db_p.name != item["name"]:
+                diff = ProductDiff(sku=db_p.sku, name=item["name"], old_price=db_p.base_price, new_price=db_p.base_price, old_stock=0, new_stock=0, seller_name=item["seller_name"])
+                changed_products.append(diff)
+
+    unique_conflicts = list({c['product_name']: c for c in conflicts}.values())
     new_authors = list(csv_authors - existing_usernames)
 
     return {
@@ -276,7 +282,7 @@ async def preview_products_import(
         "changed_products": changed_products,
         "unchanged_products": unchanged_products,
         "new_authors": new_authors,
-        "conflicts": conflicts  # ДОБАВЛЕНО: Отдаем конфликты на фронт
+        "conflicts": unique_conflicts
     }
 
 
@@ -324,6 +330,13 @@ def confirm_products_import(
             if db_product.base_price != diff.new_price:
                 changes["base_price"] = {"old": db_product.base_price, "new": diff.new_price}
                 db_product.base_price = diff.new_price
+
+                # Синхронизируем цену у детей, если обновился главный товар
+                if db_product.parent_id is None:
+                    children = session.exec(select(Product).where(Product.parent_id == db_product.id)).all()
+                    for child in children:
+                        child.base_price = diff.new_price
+                        session.add(child)
 
             if db_product.stock != diff.new_stock:
                 changes["stock"] = {"old": db_product.stock, "new": diff.new_stock}
@@ -409,6 +422,11 @@ def merge_products(
     if not target:
         raise HTTPException(status_code=404, detail="Основной товар не найден")
 
+    # ЗАЩИТА: Если выбранный главный товар сам является вложенным,
+    # делаем главным его родителя (плоская структура без "матрешек")
+    if target.parent_id:
+        target = session.get(Product, target.parent_id)
+
     # Получаем все товары-дубликаты
     sources = session.exec(
         select(Product).where(col(Product.id).in_(req.source_ids))).all()
@@ -423,10 +441,19 @@ def merge_products(
         total_stock_added += source.stock
         merged_names.append(source.name)
 
-        # Обнуляем остаток и отправляем дубликат в архив
+        # Переносим вложенный товар в блок
+        source.parent_id = target.id
         source.stock = 0
-        source.is_obsolete = True
+        source.is_obsolete = False  # Восстанавливаем из архива, если он там был
+        source.base_price = target.base_price
         session.add(source)
+
+        # ЗАЩИТА: Если у источника были свои дети, перекидываем их на нового родителя
+        children = session.exec(select(Product).where(Product.parent_id == source.id)).all()
+        for child in children:
+            child.parent_id = target.id
+            child.base_price = target.base_price
+            session.add(child)
 
     # Добавляем остатки в основной товар
     target.stock += total_stock_added
@@ -450,6 +477,34 @@ def merge_products(
     session.commit()
     return {"status": "success", "message": "Товары успешно объединены",
             "added_stock": total_stock_added}
+
+@router.post("/unmerge")
+def unmerge_product(
+        req: ProductUnmergeRequest,
+        admin_data: dict = Depends(get_current_admin),
+        session: Session = Depends(get_session)
+):
+    child = session.get(Product, req.child_id)
+    if not child or not child.parent_id:
+        raise HTTPException(status_code=400, detail="Товар не найден или не является вложенным")
+
+    old_parent_id = child.parent_id
+    child.parent_id = None
+    child.stock = 0  # При выходе из блока остаток всегда 0 (до первой выгрузки или ручной правки)
+    session.add(child)
+
+    admin_username = admin_data.get("username", "admin")
+    create_audit_log(
+        session=session,
+        actor=admin_username,
+        entity_name="Product",
+        entity_id=child.id,
+        action="unmerge_product",
+        changes={"old_parent_id": old_parent_id}
+    )
+
+    session.commit()
+    return {"status": "success", "message": "Товар исключен из блока"}
 
 
 @router.get("/low-stock", response_model=List[ProductRead])
