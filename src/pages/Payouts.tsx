@@ -1,10 +1,12 @@
 // src/pages/Payouts.tsx
 import React, { useState, useEffect } from 'react';
+import { useWebSocket } from '../api/websocket';
 import {
   CreditCard, Clock, CheckCircle, XCircle, Upload, FileText,
   Search, Shield, AlertCircle, Download
 } from 'lucide-react';
 import apiClient from '../api/axios';
+
 
 interface PayoutRequest {
   id: number;
@@ -24,6 +26,7 @@ interface PayoutRequest {
 }
 
 export const Payouts = () => {
+  const { subscribe } = useWebSocket();
   const [requests, setRequests] = useState<PayoutRequest[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -60,6 +63,22 @@ export const Payouts = () => {
     window.addEventListener('paste', handlePaste);
     return () => window.removeEventListener('paste', handlePaste);
   }, [isUploadOpen]);
+
+  useEffect(() => {
+    // Подписываемся на оба события, так как страница универсальная
+    const unsubCreated = subscribe('payout_created', () => {
+      fetchData(); // Перезагружаем список при создании новой выплаты
+    });
+
+    const unsubStatus = subscribe('payout_status_changed', () => {
+      fetchData(); // Перезагружаем список при изменении статуса
+    });
+
+    return () => {
+      unsubCreated();
+      unsubStatus();
+    };
+  }, [subscribe]);
 
   const fetchData = async () => {
     setIsLoading(true);

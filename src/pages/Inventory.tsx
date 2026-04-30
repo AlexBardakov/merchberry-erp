@@ -2,6 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { UploadCloud, CheckCircle, AlertTriangle, Package, Search, Edit2, Save, X, Archive, RefreshCw, ChevronDown, ChevronRight, Unlink } from 'lucide-react';
 import apiClient from '../api/axios';
+import { useWebSocket } from '../api/websocket';
 
 // Типизация
 interface Product {
@@ -115,6 +116,18 @@ export const Inventory = () => {
       console.error("Ошибка загрузки продавцов:", error);
     }
   };
+
+    const { subscribe } = useWebSocket();
+
+    useEffect(() => {
+      // Подписываемся на событие "inventory_updated"
+      const unsubscribe = subscribe('inventory_updated', () => {
+        console.log("Склад обновлен через WebSocket! Перезагружаю данные...");
+        fetchProducts();
+      });
+
+      return () => unsubscribe(); // Отписываемся при уходе со страницы
+    }, [subscribe]);
 
   // --- ЛОГИКА ИМПОРТА CSV ---
   const handlePreviewImport = async () => {

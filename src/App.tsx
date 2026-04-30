@@ -10,6 +10,7 @@ import { Sync } from './pages/Sync';
 import { InventoryLogs } from './pages/InventoryLogs';
 import { Payouts } from './pages/Payouts';
 import { Profile } from './pages/Profile';
+import { WebSocketProvider } from './api/websocket';
 
 // Красивые заглушки для будущих страниц
 const Placeholder = ({ title }: { title: string }) => (
@@ -20,6 +21,7 @@ const Placeholder = ({ title }: { title: string }) => (
 
 function App() {
   return (
+  <WebSocketProvider>
     <BrowserRouter>
       <Routes>
         {/* Открытый маршрут для авторизации */}
@@ -48,6 +50,7 @@ function App() {
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>
+  </WebSocketProvider>
   );
 }
 

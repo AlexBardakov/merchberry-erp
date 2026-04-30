@@ -2,6 +2,7 @@
 import json
 import os
 
+from routers import ws
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -140,3 +141,4 @@ app.include_router(analytics.router)
 app.include_router(audit.router)
 app.include_router(vk_bot.router)
 app.include_router(payouts.router)
+app.include_router(ws.router)

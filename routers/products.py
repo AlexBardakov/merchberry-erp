@@ -1,11 +1,13 @@
 import csv
 import io
 import secrets
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from sqlmodel import Session, select, col, or_
 from typing import List, Optional
 from pydantic import BaseModel
 
+from services.websocket import manager
 from database import get_session
 from models import Product, User
 from auth import get_current_user, get_current_admin, get_password_hash
@@ -409,6 +411,7 @@ def confirm_products_import(
         stats["added"] += 1
 
     session.commit()
+    await manager.broadcast({"event": "inventory_updated"})
     return {"message": "Импорт успешно завершен", "stats": stats}
 
 

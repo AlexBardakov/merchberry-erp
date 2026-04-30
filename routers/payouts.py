@@ -13,6 +13,7 @@ from auth import get_current_user, get_current_admin
 from schemas import PayoutRequestCreate, PayoutRequestAction, PayoutRequestRead
 from utils import create_audit_log
 from routers.vk_bot import send_vk_message_sync
+from services.websocket import manager
 
 router = APIRouter(prefix="/api/payouts", tags=["Payouts"])
 
@@ -23,7 +24,7 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # 1. Создание запроса (Для автора)
 @router.post("/", response_model=PayoutRequestRead)
-def create_payout_request(
+async def create_payout_request(
         req: PayoutRequestCreate,
         current_user: dict = Depends(get_current_user),
         session: Session = Depends(get_session)
@@ -79,7 +80,8 @@ def create_payout_request(
                 f"{req.comment}"
             )
         send_vk_message_sync(admin_chat_id, msg)
-
+    session.refresh(payout)
+    await manager.broadcast({"event": "payout_created", "seller_id": payout.seller_id})
     return payout
 
 
@@ -120,7 +122,7 @@ def get_my_payout_requests(
 
 # 4. Обработка запроса (Подтвердить / Отказать)
 @router.post("/{request_id}/process", response_model=PayoutRequestRead)
-def process_payout_request(
+async def process_payout_request(
         request_id: int,
         action_data: PayoutRequestAction,
         admin_data: dict = Depends(get_current_admin),
@@ -178,6 +180,15 @@ def process_payout_request(
         if payout.proof_file_url:
             msg += f"\n\nС подтверждающими документами вы можете ознакомиться внутри запроса на сайте."
         send_vk_message_sync(seller.vk_id, msg)
+
+    session.refresh(payout)
+
+    # Сигнал для продавца: статус заявки изменился
+    await manager.broadcast({  # Добавлено
+        "event": "payout_status_changed",
+        "payout_id": payout.id,
+        "new_status": payout.status
+    })
 
     return payout
 
