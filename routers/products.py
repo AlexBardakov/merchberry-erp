@@ -2,7 +2,7 @@ import csv
 import io
 import secrets
 import asyncio
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, BackgroundTasks
 from sqlmodel import Session, select, col, or_
 from typing import List, Optional
 from pydantic import BaseModel
@@ -100,7 +100,7 @@ def create_product(
 
 
 @router.patch("/{product_id}", response_model=ProductRead)
-def update_product(
+async def update_product(
         product_id: int,
         update_data: ProductUpdateRequest,
         admin_data: dict = Depends(get_current_admin),  # Как в твоем коде, меняет только админ
@@ -145,7 +145,7 @@ def update_product(
 
     session.commit()
     session.refresh(db_product)
-
+    await manager.broadcast({"event": "inventory_updated"})
     return db_product
 
 
@@ -289,8 +289,9 @@ async def preview_products_import(
 
 
 @router.post("/import/confirm")
-def confirm_products_import(
+def confirm_products_import(  # <--- Убрали async!
         request: ImportConfirmRequest,
+        background_tasks: BackgroundTasks,  # <--- Добавили фоновые задачи
         admin_data: dict = Depends(get_current_admin),
         session: Session = Depends(get_session)
 ):
@@ -302,7 +303,7 @@ def confirm_products_import(
         for author_name in request.authors_to_create:
             existing = session.exec(select(User).where(User.username == author_name)).first()
             if not existing:
-                random_pass = secrets.token_hex(4)  # Генерируем случайный пароль
+                random_pass = secrets.token_hex(4)
                 new_user = User(
                     username=author_name,
                     role="seller",
@@ -313,19 +314,17 @@ def confirm_products_import(
                 stats["authors_created"] += 1
         session.commit()
 
-    # Получаем словарь всех авторов для быстрой привязки
     all_users = session.exec(select(User)).all()
     user_map = {u.username: u.id for u in all_users}
 
     # 2. Обработка измененных товаров
     for diff in request.changed_products:
-        # Дополнительная защита: работаем только если есть уникальный ID
         if not diff.sku:
             continue
 
+        # Убрали with_for_update(), чтобы SQLite не блокировался
         db_product = session.exec(select(Product).where(Product.sku == diff.sku)).first()
 
-        # Если товар реально найден в базе
         if db_product:
             changes = {}
 
@@ -333,7 +332,6 @@ def confirm_products_import(
                 changes["base_price"] = {"old": db_product.base_price, "new": diff.new_price}
                 db_product.base_price = diff.new_price
 
-                # Синхронизируем цену у детей, если обновился главный товар
                 if db_product.parent_id is None:
                     children = session.exec(select(Product).where(Product.parent_id == db_product.id)).all()
                     for child in children:
@@ -348,7 +346,6 @@ def confirm_products_import(
                 changes["name"] = {"old": db_product.name, "new": diff.name}
                 db_product.name = diff.name
 
-            # Привязка автора ТОЛЬКО если товар был ничейным (Задача 6)
             seller_id = user_map.get(diff.seller_name) if diff.seller_name else None
             if db_product.seller_id is None and seller_id is not None:
                 changes["seller_id"] = {"old": None, "new": seller_id}
@@ -385,8 +382,7 @@ def confirm_products_import(
             seller_id=seller_id
         )
         session.add(new_product)
-        session.commit()
-        session.refresh(new_product)
+        session.flush()  # Получаем ID, но не коммитим сразу (намного быстрее!)
 
         changes = {
             "status": "created",
@@ -410,8 +406,12 @@ def confirm_products_import(
 
         stats["added"] += 1
 
+    # Сохраняем всё разом в конце (оптимизация скорости)
     session.commit()
-    await manager.broadcast({"event": "inventory_updated"})
+
+    # Передаем отправку уведомления в фон
+    background_tasks.add_task(manager.broadcast, {"event": "inventory_updated"})
+
     return {"message": "Импорт успешно завершен", "stats": stats}
 
 
