@@ -171,6 +171,7 @@ class DashboardSummary(BaseModel):
     total_commission: float
     chart_data: List[ChartDataPoint]
     top_products: List[TopProductRead]
+    bottom_products: List[TopProductRead] = []
 
 class WidgetStats(BaseModel):
     current_balance: float

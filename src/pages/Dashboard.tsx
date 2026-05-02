@@ -26,6 +26,7 @@ interface DashboardSummary {
   total_commission: number;
   chart_data: ChartDataPoint[];
   top_products: TopProduct[];
+  bottom_products: TopProduct[];
 }
 
 interface WidgetStats {
@@ -208,6 +209,26 @@ export const Dashboard = () => {
     </div>
   );
 
+  const BottomProductsList = ({ products }: { products: TopProduct[] }) => (
+    <div className="bg-red-50 rounded-xl p-4 border border-red-100 mt-4">
+      <h3 className="text-sm font-bold text-red-800 mb-3 flex items-center gap-2">
+        <TrendingUp size={16} className="rotate-180" /> Худшие продажи (АнтиТоп-5)
+      </h3>
+      {products.length > 0 ? (
+        <ul className="space-y-2">
+          {products.map((p) => (
+            <li key={p.rank} className="flex justify-between items-center text-sm">
+              <span className="text-gray-800 truncate pr-4"><span className="text-red-400 w-4 inline-block">{p.rank}.</span> {p.name}</span>
+              <span className="font-bold text-red-600 whitespace-nowrap">{p.quantity} шт.</span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="text-sm text-red-400 text-center py-2">Нет продаж за период</p>
+      )}
+    </div>
+  );
+
   return (
     <div className="space-y-6">
 
@@ -360,8 +381,9 @@ export const Dashboard = () => {
             </div>
 
             {/* Топ продуктов */}
-            <div className="lg:col-span-1">
+              <div className="lg:col-span-1">
               <TopProductsList products={summary.top_products} />
+              <BottomProductsList products={summary.bottom_products} />
             </div>
 
           </div>
@@ -401,6 +423,7 @@ export const Dashboard = () => {
                       <div><p className="text-xs text-gray-400 mb-1">Комиссия</p><p className="font-bold text-orange-500">{compSummary1.total_commission.toLocaleString('ru-RU')} ₽</p></div>
                     </div>
                     <TopProductsList products={compSummary1.top_products} />
+                    <BottomProductsList products={compSummary1.bottom_products} />
                   </>
                 )}
               </div>
@@ -421,6 +444,7 @@ export const Dashboard = () => {
                       <div><p className="text-xs text-gray-400 mb-1">Комиссия</p><p className="font-bold text-orange-500">{compSummary2.total_commission.toLocaleString('ru-RU')} ₽</p></div>
                     </div>
                     <TopProductsList products={compSummary2.top_products} />
+                    <BottomProductsList products={compSummary2.bottom_products} />
                   </>
                 )}
               </div>
