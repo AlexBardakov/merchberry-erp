@@ -68,10 +68,9 @@ async def create_payout_request(
             f"🔔 НОВЫЙ ЗАПРОС НА ВЫПЛАТУ\n"
             f"👤 Автор: {user.username}\n"
             f"📝 ФИО: {user.full_name or 'Не указано'}\n"
+            f"💳 Реквизиты: {user.payment_details or 'Не указаны'}\n"
             f"💰 Текущий баланс: {user.balance} ₽\n"
             f"📤 К выводу: {req.amount} ₽\n\n"
-            f"--- Приватная заметка (реквизиты) ---\n"
-            f"{user.notes or 'Нет заметок в профиле'}\n\n"
         )
         # Визуальное разделение комментариев
         if req.comment:

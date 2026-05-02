@@ -1,6 +1,6 @@
 // src/pages/Users.tsx
 import React, { useState, useEffect } from 'react';
-import { UserPlus, Key, Shield, Copy, CheckCircle, Search, Edit2, UserX, UserCheck, Lock, Trash2, Wallet, CheckSquare, Square } from 'lucide-react';
+import { UserPlus, Key, Shield, Copy, CheckCircle, Search, Edit2, UserX, UserCheck, Lock, Trash2, Wallet, CheckSquare, Square, X } from 'lucide-react';
 import apiClient from '../api/axios';
 
 interface User {
@@ -15,6 +15,8 @@ interface User {
   notes: string | null;
   is_active: boolean;
   created_at: string;
+  shelf_location: string | null;
+  payment_details: string | null;
 }
 
 export const Users = () => {
@@ -31,13 +33,14 @@ export const Users = () => {
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
   const [isRentModalOpen, setIsRentModalOpen] = useState(false);
+  const [isViewModalOpen, setIsViewModalOpen] = useState(false);
 
   // Выбранный пользователь
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
 
   // Формы
   const [createData, setCreateData] = useState({ username: '', full_name: '', phone: '', commission_percent: 15 });
-  const [editData, setEditData] = useState({ full_name: '', phone: '', commission_percent: 15, rent_rate: 0, notes: '' });
+  const [editData, setEditData] = useState({ full_name: '', phone: '', commission_percent: 15, rent_rate: 0, notes: '', shelf_location: '', payment_details: '' });
 
   // Генерация паролей
   const [generatedPassword, setGeneratedPassword] = useState('');
@@ -224,9 +227,16 @@ export const Users = () => {
       phone: user.phone || '',
       commission_percent: user.commission_percent,
       rent_rate: user.rent_rate || 0,
-      notes: user.notes || ''
+      notes: user.notes || '',
+      shelf_location: user.shelf_location || '', // ДОБАВЛЕНО
+      payment_details: user.payment_details || '' // ДОБАВЛЕНО
     });
     setIsEditModalOpen(true);
+  };
+
+  const openViewModal = (user: User) => {
+    setSelectedUser(user);
+    setIsViewModalOpen(true);
   };
 
   const openPasswordModal = (user: User) => {
@@ -320,7 +330,14 @@ export const Users = () => {
                 const rowBg = index % 2 === 0 ? 'bg-white hover:bg-gray-50' : 'bg-gray-50/40 hover:bg-gray-100';
 
                 return (
-                  <tr key={user.id} className={`transition-colors ${selectedIds.includes(user.id) ? 'bg-indigo-50/50' : !user.is_active ? 'bg-red-50/30' : rowBg}`}>
+                  <tr
+                    key={user.id}
+                    className={`transition-colors cursor-pointer ${selectedIds.includes(user.id) ? 'bg-indigo-50/50' : !user.is_active ? 'bg-red-50/30' : rowBg}`}
+                    onClick={(e: React.MouseEvent<HTMLTableRowElement>) => {
+                      if ((e.target as HTMLElement).closest('button') || (e.target as HTMLElement).closest('input')) return;
+                      openViewModal(user);
+                    }}
+                  >
                     <td className="p-4">
                       <button onClick={() => toggleSelectOne(user.id)} className="text-gray-400 hover:text-indigo-600 transition-colors">
                         {selectedIds.includes(user.id) ? <CheckSquare size={20} className="text-indigo-600" /> : <Square size={20} />}
@@ -440,10 +457,22 @@ export const Users = () => {
                 <label className="block text-sm font-medium text-gray-700 mb-1">Телефон</label>
                 <input type="text" className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:border-indigo-500" value={editData.phone} onChange={(e) => setEditData({...editData, phone: e.target.value})} />
               </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Место на полке</label>
+                      <input type="text" placeholder="Например: К21-22, А45" className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:border-indigo-500" value={editData.shelf_location} onChange={(e) => setEditData({...editData, shelf_location: e.target.value})} />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Реквизиты</label>
+                      <input type="text" placeholder="Сбербанк, по номеру..." className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:border-indigo-500" value={editData.payment_details} onChange={(e) => setEditData({...editData, payment_details: e.target.value})} />
+                    </div>
+                </div>
+
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Приватная заметка (видит только Админ)</label>
                 <textarea
-                  rows={3} placeholder="Например: Переводить только на Т-Банк по номеру телефона..."
+                  rows={3} placeholder="Например: Иногда просит переводить на другой номер телефона"
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:border-indigo-500 resize-none"
                   value={editData.notes} onChange={(e) => setEditData({...editData, notes: e.target.value})}
                 />
@@ -540,6 +569,71 @@ export const Users = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+
+      {/* МОДАЛЬНОЕ ОКНО ПРОСМОТРА КАРТОЧКИ */}
+      {isViewModalOpen && selectedUser && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-lg shadow-xl relative">
+            <button onClick={() => setIsViewModalOpen(false)} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 transition-colors">
+              <X size={24} />
+            </button>
+
+            <div className="flex items-center gap-4 mb-6">
+              <div className="w-16 h-16 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center text-2xl font-bold">
+                {selectedUser.username.charAt(0).toUpperCase()}
+              </div>
+              <div>
+                <h2 className="text-xl font-bold text-gray-900">{selectedUser.username}</h2>
+                <div className="flex items-center gap-2 mt-1">
+                  <span className={`px-2 py-0.5 rounded text-xs font-bold uppercase ${selectedUser.is_active ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-600'}`}>
+                    {selectedUser.is_active ? 'Активен' : 'Заблокирован'}
+                  </span>
+                  <span className="text-xs text-gray-400">ID: {selectedUser.id}</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-y-4 gap-x-6 text-sm">
+              <div>
+                <p className="text-gray-400 uppercase text-[10px] font-bold tracking-wider mb-1">ФИО</p>
+                <p className="font-medium text-gray-900">{selectedUser.full_name || '—'}</p>
+              </div>
+              <div>
+                <p className="text-gray-400 uppercase text-[10px] font-bold tracking-wider mb-1">Телефон</p>
+                <p className="font-medium text-gray-900">{selectedUser.phone || '—'}</p>
+              </div>
+              <div>
+                <p className="text-gray-400 uppercase text-[10px] font-bold tracking-wider mb-1">Комиссия точки</p>
+                <p className="font-bold text-indigo-600">{selectedUser.commission_percent}%</p>
+              </div>
+              <div>
+                <p className="text-gray-400 uppercase text-[10px] font-bold tracking-wider mb-1">Аренда полки</p>
+                <p className="font-medium text-gray-900">{selectedUser.rent_rate > 0 ? `${selectedUser.rent_rate} ₽/мес` : 'Не задана'}</p>
+              </div>
+              <div>
+                <p className="text-gray-400 uppercase text-[10px] font-bold tracking-wider mb-1">Место на полке</p>
+                <p className="font-medium text-gray-900">{selectedUser.shelf_location || '—'}</p>
+              </div>
+              <div>
+                <p className="text-gray-400 uppercase text-[10px] font-bold tracking-wider mb-1">Реквизиты</p>
+                <p className="font-medium text-gray-900">{selectedUser.payment_details || '—'}</p>
+              </div>
+            </div>
+
+            {selectedUser.notes && (
+              <div className="mt-6 pt-4 border-t border-gray-100">
+                <p className="text-gray-400 uppercase text-[10px] font-bold tracking-wider mb-2 flex items-center gap-1">
+                  <Shield size={12} className="text-orange-500" /> Приватная заметка
+                </p>
+                <p className="text-sm text-gray-700 bg-orange-50 p-3 rounded-lg border border-orange-100 italic">
+                  {selectedUser.notes}
+                </p>
+              </div>
+            )}
           </div>
         </div>
       )}
