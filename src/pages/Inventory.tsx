@@ -111,7 +111,10 @@ export const Inventory = () => {
   const fetchSellers = async () => {
     try {
       const res = await apiClient.get('/users/');
-      setSellers(res.data.filter((u: any) => u.role === 'seller'));
+      const filteredAndSorted = res.data
+        .filter((u: any) => u.role === 'seller')
+        .sort((a: any, b: any) => a.username.localeCompare(b.username)); // Сортировка А-Я
+      setSellers(filteredAndSorted);
     } catch (error) {
       console.error("Ошибка загрузки продавцов:", error);
     }
@@ -466,7 +469,7 @@ export const Inventory = () => {
             >
               <option value="all">Все продавцы</option>
               <option value="unassigned">⚠️ Нераспределенные (Ничейные)</option>
-              {sellers.map(s => <option key={s.id} value={s.id}>{s.username} ({s.full_name || 'без имени'})</option>)}
+              {sellers.map(s => <option key={s.id} value={s.id}>{s.username} </option>)}
             </select>
           )}
 
@@ -558,17 +561,20 @@ export const Inventory = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-                {topLevelProducts.map((product) => {
+                {topLevelProducts.map((product, index) => { // ДОБАВИЛИ index
                 const isEditing = editingId === product.id;
                 const isSelected = selectedIds.includes(product.id);
                 const blockChildren = childrenMap[product.id] || [];
                 const hasChildren = blockChildren.length > 0;
                 const isExpanded = expandedBlocks.includes(product.id);
 
+                // Настраиваем зебру через index
+                const rowBg = index % 2 === 0 ? 'bg-white hover:bg-gray-50' : 'bg-gray-50/40 hover:bg-gray-100';
+
                 return (
                   <React.Fragment key={product.id}>
                     {/* СТРОКА ГЛАВНОГО ТОВАРА */}
-                    <tr className={`transition-colors ${product.is_obsolete ? 'bg-gray-50/70' : 'hover:bg-gray-50'} ${isSelected ? 'bg-indigo-50/30' : ''}`}>
+                    <tr className={`transition-colors ${product.is_obsolete ? 'bg-gray-50/70' : rowBg} ${isSelected ? 'bg-indigo-50/30' : ''}`}>
                       {isAdmin && (
                         <td className="p-4">
                           <input

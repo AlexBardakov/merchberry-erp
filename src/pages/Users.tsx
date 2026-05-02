@@ -313,11 +313,14 @@ export const Users = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {users.map((user) => {
+              {users.map((user, index) => { // ДОБАВИЛИ index
                 const isDeleteAllowed = (new Date().getTime() - new Date(user.created_at).getTime()) < 72 * 60 * 60 * 1000;
 
+                // Настраиваем зебру
+                const rowBg = index % 2 === 0 ? 'bg-white hover:bg-gray-50' : 'bg-gray-50/40 hover:bg-gray-100';
+
                 return (
-                  <tr key={user.id} className={`transition-colors ${selectedIds.includes(user.id) ? 'bg-indigo-50/50' : !user.is_active ? 'bg-red-50/30' : 'hover:bg-gray-50'}`}>
+                  <tr key={user.id} className={`transition-colors ${selectedIds.includes(user.id) ? 'bg-indigo-50/50' : !user.is_active ? 'bg-red-50/30' : rowBg}`}>
                     <td className="p-4">
                       <button onClick={() => toggleSelectOne(user.id)} className="text-gray-400 hover:text-indigo-600 transition-colors">
                         {selectedIds.includes(user.id) ? <CheckSquare size={20} className="text-indigo-600" /> : <Square size={20} />}

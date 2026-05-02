@@ -146,7 +146,7 @@ export const Profile = () => {
                 </div>
               </div>
             </div>
-            {user.notes && (
+            {user.role === 'admin' && user.notes && (
               <div className="mt-6 pt-6 border-t border-gray-100">
                 <label className="text-xs font-medium text-gray-400 uppercase">Заметки администратора</label>
                 <p className="mt-1 text-sm text-gray-600 italic">{user.notes}</p>

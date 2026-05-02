@@ -6,7 +6,7 @@ import secrets
 
 from dotenv import load_dotenv
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from sqlmodel import Session, select, or_, col
+from sqlmodel import Session, select, or_, col, func
 from typing import List, Optional
 from datetime import date, timedelta, datetime, time, timezone
 
@@ -62,11 +62,12 @@ def read_users(
     statement = select(User)
 
     if search:
+        search_lower = f"%{search.lower()}%"
         statement = statement.where(
             or_(
-                User.username.ilike(f"%{search}%"),
-                User.full_name.ilike(f"%{search}%"),
-                User.phone.ilike(f"%{search}%")
+                func.lower(User.username).like(search_lower),
+                func.lower(User.full_name).like(search_lower),
+                func.lower(User.phone).like(search_lower)
             )
         )
 

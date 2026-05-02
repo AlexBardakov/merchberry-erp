@@ -114,7 +114,10 @@ export const Finance = () => {
   const fetchSellers = async () => {
     try {
       const res = await apiClient.get('/users/');
-      setSellers(res.data.filter((u: any) => u.role === 'seller'));
+      const filteredAndSorted = res.data
+        .filter((u: any) => u.role === 'seller')
+        .sort((a: any, b: any) => a.username.localeCompare(b.username)); // Сортировка А-Я
+      setSellers(filteredAndSorted);
     } catch (error) {
       console.error("Ошибка загрузки продавцов:", error);
     }
@@ -297,11 +300,15 @@ const getTransactionTypeInfo = (type: string) => {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {transactions.map((txn) => {
+              {transactions.map((txn, index) => { // ДОБАВИЛИ index
                 const typeInfo = getTransactionTypeInfo(txn.type);
                 const isSelected = selectedIds.includes(txn.id);
+
+                // Настраиваем зебру через index
+                const rowBg = index % 2 === 0 ? 'bg-white hover:bg-gray-50' : 'bg-gray-50/40 hover:bg-gray-100';
+
                 return (
-                  <tr key={txn.id} className={`transition-colors hover:bg-gray-50 ${isSelected ? 'bg-indigo-50/30' : ''}`}>
+                  <tr key={txn.id} className={`transition-colors ${isSelected ? 'bg-indigo-50/30' : rowBg}`}>
                     {isAdmin && (
                       <td className="p-4">
                         {txn.type === 'sale' && (

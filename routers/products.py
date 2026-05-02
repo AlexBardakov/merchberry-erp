@@ -3,7 +3,7 @@ import io
 import secrets
 import asyncio
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, BackgroundTasks
-from sqlmodel import Session, select, col, or_
+from sqlmodel import Session, select, col, or_, func
 from typing import List, Optional
 from pydantic import BaseModel
 
@@ -43,10 +43,11 @@ def get_products(
 
     # Обработка текстового поиска (по артикулу ИЛИ названию)
     if search:
+        search_lower = f"%{search.lower()}%"
         statement = statement.where(
             or_(
-                Product.name.ilike(f"%{search}%"),
-                Product.sku.ilike(f"%{search}%")
+                func.lower(Product.name).like(search_lower),
+                func.lower(Product.sku).like(search_lower)
             )
         )
 
