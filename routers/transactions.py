@@ -1,3 +1,5 @@
+import fcntl
+
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
 from sqlmodel import Session, select, col
@@ -15,8 +17,6 @@ from routers.vk_bot import send_vk_message_sync
 from services.websocket import manager
 
 router = APIRouter(prefix="/api/transactions", tags=["Transactions"])
-
-SYNC_IN_PROGRESS = False
 
 class BalanceCorrectionRequest(BaseModel):
     seller_id: int
@@ -291,244 +291,242 @@ def create_manual_transaction(
 
 
 def run_b2b_sync(session: Session, force_full: bool = False):
-    client = BusinessRuClient()
+    lock_file = open("sync_b2b.lock", "w")
+    try:
+        # Пытаемся захватить эксклюзивную неблокирующую блокировку
+        fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        # Если другой процесс уже захватил файл, мгновенно выходим
+        return {
+            "status": "locked",
+            "message": "Синхронизация уже выполняется другим процессом."
+        }
 
-    existing_check = session.exec(
-        select(Transaction).where(Transaction.external_check_id != None).limit(
-            1)
-    ).first()
+    try:
+        client = BusinessRuClient()
 
-    is_first_sync = force_full or (existing_check is None)
+        existing_check = session.exec(
+            select(Transaction).where(Transaction.external_check_id != None).limit(1)
+        ).first()
 
-    all_checks = []
-    all_returns = []
+        is_first_sync = force_full or (existing_check is None)
 
-    if is_first_sync:
-        page = 1
-        while True:
-            checks = client.get_checks(limit=250, page=page)
-            if not checks: break
-            all_checks.extend(checks)
-            page += 1
+        all_checks = []
+        all_returns = []
 
-        page = 1
-        while True:
-            returns = client.get_returns(limit=250, page=page)
-            if not returns: break
-            all_returns.extend(returns)
-            page += 1
-    else:
-        all_checks = client.get_checks(limit=100, page=1)
-        all_returns = client.get_returns(limit=100, page=1)
+        if is_first_sync:
+            page = 1
+            while True:
+                checks = client.get_checks(limit=250, page=page)
+                if not checks: break
+                all_checks.extend(checks)
+                page += 1
 
-    # Помечаем операции для удобной обработки
-    for c in all_checks:
-        c["is_return"] = False
-    for r in all_returns:
-        r["is_return"] = True
+            page = 1
+            while True:
+                returns = client.get_returns(limit=250, page=page)
+                if not returns: break
+                all_returns.extend(returns)
+                page += 1
+        else:
+            all_checks = client.get_checks(limit=100, page=1)
+            all_returns = client.get_returns(limit=100, page=1)
 
-    # Объединяем списки продаж и возвратов в один массив
-    all_operations = all_checks + all_returns
+        # Помечаем операции для удобной обработки
+        for c in all_checks:
+            c["is_return"] = False
+        for r in all_returns:
+            r["is_return"] = True
 
-    sync_conflicts = []
-    processed_count = 0
-    skipped_count = 0
-    total_revenue = 0.0
+        # Объединяем списки продаж и возвратов в один массив
+        all_operations = all_checks + all_returns
 
-    TOMSK_TZ = timezone(timedelta(hours=7))
+        sync_conflicts = []
+        processed_count = 0
+        skipped_count = 0
+        total_revenue = 0.0
 
-    for op in all_operations:
-        is_return = op.get("is_return", False)
-        raw_id = str(op.get("id", "")).strip()
+        TOMSK_TZ = timezone(timedelta(hours=7))
 
-        if not raw_id:
-            continue
+        for op in all_operations:
+            is_return = op.get("is_return", False)
+            raw_id = str(op.get("id", "")).strip()
 
-        external_id = f"return_{raw_id}" if is_return else raw_id
-
-        # --- ПАРСИНГ РЕАЛЬНОЙ ДАТЫ ЧЕКА В ТОМСКОЕ ВРЕМЯ ---
-        raw_date = op.get("date", "")
-        check_date = datetime.now(TOMSK_TZ)
-        if raw_date:
-            try:
-                clean_date = raw_date.replace(" MSK", "").strip()
-                dt = datetime.strptime(clean_date, "%d.%m.%Y %H:%M:%S")
-                # Бизнес.ру отдает по Москве (UTC+3), Томск - это UTC+7, значит прибавляем 4 часа
-                dt += timedelta(hours=4)
-                check_date = dt.replace(tzinfo=TOMSK_TZ)
-            except ValueError:
-                pass
-
-        # === ЖЕСТКАЯ ЗАЩИТА И ПРОВЕРКА НА НОВИЗНУ ===
-        is_new_check = True
-        existing_txs = session.exec(
-            select(Transaction).where(
-                Transaction.external_check_id == external_id)
-        ).all()
-
-        if existing_txs:
-            is_new_check = False
-            has_manual = any(tx.is_manual_assigned for tx in existing_txs)
-
-            if has_manual:
-                skipped_count += 1
-                sync_conflicts.append({"check_id": external_id,
-                                       "products": "Содержит ручные правки админа"})
+            if not raw_id:
                 continue
 
-            # Всегда пересоздаем чек, если он попал в зону видимости (последние 100 или force_full),
-            # чтобы неизвестные товары могли распознаться после импорта авторов. Спама и списаний не будет!
-            for old_tx in existing_txs:
-                if old_tx.seller_id:
-                    seller = session.exec(select(User).where(
-                        User.id == old_tx.seller_id).with_for_update()).first()
-                    if seller:
-                        seller.balance = round(seller.balance - old_tx.amount,
-                                               2)
-                        session.add(seller)
-                session.delete(old_tx)
-            session.flush()
+            external_id = f"return_{raw_id}" if is_return else raw_id
 
-        # === ОБРАБОТКА ТОВАРОВ ===
-        grouped_data = {}
+            # --- ПАРСИНГ РЕАЛЬНОЙ ДАТЫ ЧЕКА В ТОМСКОЕ ВРЕМЯ ---
+            raw_date = op.get("date", "")
+            check_date = datetime.now(TOMSK_TZ)
+            if raw_date:
+                try:
+                    clean_date = raw_date.replace(" MSK", "").strip()
+                    dt = datetime.strptime(clean_date, "%d.%m.%Y %H:%M:%S")
+                    # Бизнес.ру отдает по Москве (UTC+3), Томск - это UTC+7, значит прибавляем 4 часа
+                    dt += timedelta(hours=4)
+                    check_date = dt.replace(tzinfo=TOMSK_TZ)
+                except ValueError:
+                    pass
 
-        for item in op.get("goods", []):
-            b2b_good_id = str(item.get("good_id", "")).strip()
-            price = float(item.get("price", 0))
-            count = int(float(item.get("amount", 1)))
+            # === ЖЕСТКАЯ ЗАЩИТА И ПРОВЕРКА НА НОВИЗНУ ===
+            is_new_check = True
+            existing_txs = session.exec(
+                select(Transaction).where(Transaction.external_check_id == external_id)
+            ).all()
 
-            product = session.exec(
-                select(Product).where(Product.sku == b2b_good_id)).first()
-            seller_id = product.seller_id if product else None
+            if existing_txs:
+                is_new_check = False
+                has_manual = any(tx.is_manual_assigned for tx in existing_txs)
 
-            if product:
-                name = product.name
-            else:
-                raw_name = item.get("name", "Неизвестный товар")
-                name = f"{raw_name} [ID: {b2b_good_id}]"
+                if has_manual:
+                    skipped_count += 1
+                    sync_conflicts.append({"check_id": external_id, "products": "Содержит ручные правки админа"})
+                    continue
 
-            # ОБНОВЛЕНИЕ СКЛАДА С УЧЕТОМ БЛОКОВ
-            # Списываем остаток ТОЛЬКО если это абсолютно новый чек!
-            if product and is_new_check:
-                target_stock_product = product
-                if product.parent_id:
-                    parent_product = session.get(Product, product.parent_id)
-                    if parent_product:
-                        target_stock_product = parent_product
+                # Всегда пересоздаем чек, если он попал в зону видимости (последние 100 или force_full)
+                for old_tx in existing_txs:
+                    if old_tx.seller_id:
+                        seller = session.exec(select(User).where(User.id == old_tx.seller_id).with_for_update()).first()
+                        if seller:
+                            seller.balance = round(seller.balance - old_tx.amount, 2)
+                            session.add(seller)
+                    session.delete(old_tx)
+                session.flush()
+
+            # === ОБРАБОТКА ТОВАРОВ ===
+            grouped_data = {}
+
+            for item in op.get("goods", []):
+                b2b_good_id = str(item.get("good_id", "")).strip()
+                price = float(item.get("price", 0))
+                count = int(float(item.get("amount", 1)))
+
+                product = session.exec(select(Product).where(Product.sku == b2b_good_id)).first()
+                seller_id = product.seller_id if product else None
+
+                if product:
+                    name = product.name
+                else:
+                    raw_name = item.get("name", "Неизвестный товар")
+                    name = f"{raw_name} [ID: {b2b_good_id}]"
+
+                # ОБНОВЛЕНИЕ СКЛАДА С УЧЕТОМ БЛОКОВ
+                if product and is_new_check:
+                    target_stock_product = product
+                    if product.parent_id:
+                        parent_product = session.get(Product, product.parent_id)
+                        if parent_product:
+                            target_stock_product = parent_product
+
+                    if is_return:
+                        target_stock_product.stock += count
+                    else:
+                        target_stock_product.stock = max(0, target_stock_product.stock - count)
+
+                    session.add(target_stock_product)
+
+                # Формируем финансовые данные
+                if seller_id not in grouped_data:
+                    grouped_data[seller_id] = {"full_amount": 0.0, "profit": 0.0, "commission": 0.0, "items": []}
+
+                sign = -1 if is_return else 1
+                total_item_price = (price * count) * sign
+
+                grouped_data[seller_id]["full_amount"] += total_item_price
+                grouped_data[seller_id]["items"].append(f"{name} ({count} шт.)")
+
+                if seller_id:
+                    seller = session.get(User, seller_id)
+                    commission_rate = seller.commission_percent if (seller and seller.is_active) else 15.0
+                else:
+                    commission_rate = 15.0
+
+                profit = total_item_price * (1 - commission_rate / 100.0)
+                commission = total_item_price - profit
+
+                grouped_data[seller_id]["profit"] += profit
+                grouped_data[seller_id]["commission"] += commission
+
+            # === СОЗДАНИЕ ОБЪЕДИНЕННЫХ ТРАНЗАКЦИЙ ===
+            for s_id, data in grouped_data.items():
+                items_str = ", ".join(data["items"])
 
                 if is_return:
-                    target_stock_product.stock += count
+                    tx_type = "return"
+                    orig_check = op.get("retail_check_id")
+                    comment = f"Возврат по чеку #{orig_check} (Бизнес.Ру)" if orig_check else f"Возврат #{raw_id} (Бизнес.Ру)"
                 else:
-                    target_stock_product.stock = max(0,
-                                                     target_stock_product.stock - count)
+                    tx_type = "sale"
+                    comment = f"Чек #{raw_id} (Бизнес.Ру)"
 
-                session.add(target_stock_product)
+                new_tx = Transaction(
+                    type=tx_type,
+                    full_amount=data["full_amount"],
+                    amount=round(data["profit"], 2),
+                    commission_amount=round(data["commission"], 2),
+                    seller_id=s_id,
+                    product_identifier=items_str,
+                    comment=comment,
+                    external_check_id=external_id,
+                    date=check_date
+                )
+                session.add(new_tx)
 
-            # Формируем финансовые данные
-            if seller_id not in grouped_data:
-                grouped_data[seller_id] = {"full_amount": 0.0, "profit": 0.0,
-                                           "commission": 0.0, "items": []}
+                if s_id:
+                    seller = session.exec(select(User).where(User.id == s_id).with_for_update()).first()
+                    if seller and seller.is_active:
+                        seller.balance = round(seller.balance + data["profit"], 2)
+                        session.add(seller)
 
-            sign = -1 if is_return else 1
-            total_item_price = (price * count) * sign
-
-            grouped_data[seller_id]["full_amount"] += total_item_price
-            grouped_data[seller_id]["items"].append(f"{name} ({count} шт.)")
-
-            if seller_id:
-                seller = session.get(User, seller_id)
-                commission_rate = seller.commission_percent if (
-                            seller and seller.is_active) else 15.0
-            else:
-                commission_rate = 15.0
-
-            profit = total_item_price * (1 - commission_rate / 100.0)
-            commission = total_item_price - profit
-
-            grouped_data[seller_id]["profit"] += profit
-            grouped_data[seller_id]["commission"] += commission
-
-        # === СОЗДАНИЕ ОБЪЕДИНЕННЫХ ТРАНЗАКЦИЙ ===
-        for s_id, data in grouped_data.items():
-            items_str = ", ".join(data["items"])
-
-            if is_return:
-                tx_type = "return"
-                orig_check = op.get("retail_check_id")
-                comment = f"Возврат по чеку #{orig_check} (Бизнес.Ру)" if orig_check else f"Возврат #{raw_id} (Бизнес.Ру)"
-            else:
-                tx_type = "sale"
-                comment = f"Чек #{raw_id} (Бизнес.Ру)"
-
-            new_tx = Transaction(
-                type=tx_type,
-                full_amount=data["full_amount"],
-                amount=round(data["profit"], 2),
-                commission_amount=round(data["commission"], 2),
-                seller_id=s_id,
-                product_identifier=items_str,
-                comment=comment,
-                external_check_id=external_id,
-                date=check_date
-            )
-            session.add(new_tx)
-
-            if s_id:
-                seller = session.exec(select(User).where(
-                    User.id == s_id).with_for_update()).first()
-                if seller and seller.is_active:
-                    seller.balance = round(seller.balance + data["profit"],
-                                               2)
-                    session.add(seller)
-
-                    # ОТПРАВКА ВК: Строго проверяем is_new_check, чтобы не спамить!
-                    if seller.vk_id and seller.vk_notify_sales and is_new_check:
-                        if is_return:
-                            msg = (f"🔄 Оформлен возврат товара!\n\n"
+                        # ОТПРАВКА ВК: Строго проверяем is_new_check, чтобы не спамить!
+                        if seller.vk_id and seller.vk_notify_sales and is_new_check:
+                            if is_return:
+                                msg = (f"🔄 Оформлен возврат товара!\n\n"
                                        f"С вашего баланса списано: {abs(round(data['profit'], 2))} ₽\n"
-                                       f"Товары возвращены на склад:\n• " + "\n• ".join(
-                                    data["items"]))
-                        else:
-                            msg = (f"💰 Новая продажа!\n\n"
+                                       f"Товары возвращены на склад:\n• " + "\n• ".join(data["items"]))
+                            else:
+                                msg = (f"💰 Новая продажа!\n\n"
                                        f"Вам начислено: {round(data['profit'], 2)} ₽\n"
-                                       f"Товары:\n• " + "\n• ".join(
-                                    data["items"]))
-                        send_vk_message_sync(seller.vk_id, msg)
+                                       f"Товары:\n• " + "\n• ".join(data["items"]))
+                            send_vk_message_sync(seller.vk_id, msg)
 
                 # Считаем только реально новые чеки для дашборда синхронизации
-                # Этот if на одном уровне с if s_id:
-            if is_new_check:
-                processed_count += 1
-                total_revenue += data["full_amount"]
+                if is_new_check:
+                    processed_count += 1
+                    total_revenue += data["full_amount"]
 
             # Если чек уже был в базе и мы его просто тихо обновили (дораспознали),
-            # отправляем его в счетчик "Пропущено" для фронтенда.
-            # Этот if находится внутри цикла for op, но СНАРУЖИ цикла for s_id
-        if not is_new_check:
-            skipped_count += 1
+            if not is_new_check:
+                skipped_count += 1
 
         # === КОНЕЦ ЦИКЛА for op in all_operations ===
 
         # Сохраняем все изменения разом ПОСЛЕ того, как обработали все чеки
-    session.commit()
+        session.commit()
 
-    if processed_count == 0 and skipped_count == 0:
-        return {
+        if processed_count == 0 and skipped_count == 0:
+            return {
                 "status": "error",
                 "message": "Новых чеков и возвратов не найдено.",
                 "processed_items": 0, "skipped_checks": 0, "total_revenue": 0,
                 "conflicts": []
-        }
+            }
 
-    return {
+        return {
             "status": "success",
             "message": f"Синхронизация завершена. Новых: {processed_count}, обновлено существующих: {skipped_count}.",
             "processed_items": processed_count,
             "skipped_checks": skipped_count,
             "total_revenue": total_revenue,
             "conflicts": sync_conflicts
-    }
+        }
 
+    finally:
+        # === ОСВОБОЖДЕНИЕ БЛОКИРОВКИ (Сработает в любом случае, даже при ошибке) ===
+        fcntl.flock(lock_file, fcntl.LOCK_UN)
+        lock_file.close()
 
 @router.post("/sync/sales")
 def trigger_manual_sync(
@@ -536,18 +534,16 @@ def trigger_manual_sync(
         admin_data: dict = Depends(get_current_admin),
         session: Session = Depends(get_session)
 ):
-    global SYNC_IN_PROGRESS
+    result = run_b2b_sync(session=session, force_full=force_full)
 
-    if SYNC_IN_PROGRESS:
-        raise HTTPException(status_code=423,
-                            detail="Синхронизация уже запущена. Пожалуйста, подождите завершения.")
+    # Если функция вернула статус "locked", выдаем 423 ошибку фронтенду
+    if result.get("status") == "locked":
+        raise HTTPException(
+            status_code=423,
+            detail="Синхронизация уже запущена в другом процессе. Пожалуйста, подождите завершения."
+        )
 
-    try:
-        SYNC_IN_PROGRESS = True
-        result = run_b2b_sync(session=session, force_full=force_full)
-        return result
-    finally:
-        SYNC_IN_PROGRESS = False
+    return result
 
 
 @router.post("/bulk-reassign")

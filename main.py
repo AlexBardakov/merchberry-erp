@@ -37,21 +37,16 @@ scheduler = BackgroundScheduler()
 # Задача, которая будет выполняться в фоне
 def scheduled_sync_job():
     print("🤖 Запуск автоматической фоновой синхронизации с Бизнес.Ру...")
-    if tx_module.SYNC_IN_PROGRESS:
-        print(
-            "⏳ Синхронизация уже идет. Защита от дублирования активна. Пропуск...")
-        return
-
-    tx_module.SYNC_IN_PROGRESS = True
     try:
         with Session(engine) as session:
             result = tx_module.run_b2b_sync(session=session)
-            print(
-                f"✅ Синхронизация завершена: обработано {result['processed_items']} позиций.")
+
+            if result.get("status") == "locked":
+                print("⏳ Синхронизация уже идет в другом воркере. Пропуск...")
+            else:
+                print(f"✅ Синхронизация завершена: обработано {result.get('processed_items', 0)} позиций.")
     except Exception as e:
         print(f"❌ Ошибка фоновой синхронизации: {e}")
-    finally:
-        tx_module.SYNC_IN_PROGRESS = False
 
 
 def scheduled_inventory_notify_job():
