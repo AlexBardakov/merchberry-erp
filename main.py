@@ -1,6 +1,7 @@
 # Файл: main.py
 import json
 import os
+import routers.transactions as tx_module
 
 from routers import ws
 from fastapi import FastAPI
@@ -18,7 +19,7 @@ from routers import auth_router, users, products, transactions, analytics, \
 from routers.transactions import run_b2b_sync  # Импортируем нашу функцию
 
 app = FastAPI(title="Merchberry ERP API")
-
+TOMSK_TZ = timezone(timedelta(hours=7))
 os.makedirs("uploads/payouts", exist_ok=True)
 app.mount("/api/uploads", StaticFiles(directory="uploads"), name="uploads")
 
@@ -36,29 +37,35 @@ scheduler = BackgroundScheduler()
 # Задача, которая будет выполняться в фоне
 def scheduled_sync_job():
     print("🤖 Запуск автоматической фоновой синхронизации с Бизнес.Ру...")
-    with Session(engine) as session:
-        try:
-            # Запрашиваем данные только за последний день, чтобы не перегружать API
-            result = run_b2b_sync(session=session)
-            print(f"✅ Синхронизация завершена: обработано {result['processed_items']} позиций.")
-        except Exception as e:
-            print(f"❌ Ошибка фоновой синхронизации: {e}")
+    if tx_module.SYNC_IN_PROGRESS:
+        print(
+            "⏳ Синхронизация уже идет. Защита от дублирования активна. Пропуск...")
+        return
+
+    tx_module.SYNC_IN_PROGRESS = True
+    try:
+        with Session(engine) as session:
+            result = tx_module.run_b2b_sync(session=session)
+            print(
+                f"✅ Синхронизация завершена: обработано {result['processed_items']} позиций.")
+    except Exception as e:
+        print(f"❌ Ошибка фоновой синхронизации: {e}")
+    finally:
+        tx_module.SYNC_IN_PROGRESS = False
 
 
 def scheduled_inventory_notify_job():
     print("📦 Запуск ежедневной рассылки об изменениях склада...")
     with Session(engine) as session:
         try:
-            # Находим всех, у кого включены уведомления и привязан ВК
             users_to_notify = session.exec(
-                select(User).where(User.vk_id != None,
-                                   User.vk_notify_inventory == True)
+                select(User).where(User.vk_id != None, User.vk_notify_inventory == True)
             ).all()
 
             if not users_to_notify:
                 return
 
-            yesterday = datetime.now(timezone.utc) - timedelta(days=1)
+            yesterday = datetime.now(TOMSK_TZ) - timedelta(days=1)
 
             for user in users_to_notify:
                 # Получаем ID всех товаров пользователя

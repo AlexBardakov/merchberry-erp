@@ -1,8 +1,12 @@
 # Файл: models.py
 from typing import Optional, List, Dict
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from sqlmodel import Field, SQLModel, Relationship, Column, JSON
 
+TOMSK_TZ = timezone(timedelta(hours=7))
+
+def get_tomsk_now():
+    return datetime.now(TOMSK_TZ)
 
 # --- ТАБЛИЦА: ПОЛЬЗОВАТЕЛИ (Арендаторы и Админ) ---
 class User(SQLModel, table=True):
@@ -15,7 +19,7 @@ class User(SQLModel, table=True):
     phone: Optional[str] = Field(default=None)
     payment_details: Optional[str] = Field(default=None)
 
-    profile_last_modified: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    profile_last_modified: datetime = Field(default_factory=get_tomsk_now)
     profile_modified_by: str = Field(default="admin")
 
     shelf_location: Optional[str] = Field(default=None)
@@ -35,7 +39,7 @@ class User(SQLModel, table=True):
 
     notes: Optional[str] = None
     is_active: bool = Field(default=True) # Используется как статус архивации (False = в архиве)
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = Field(default_factory=get_tomsk_now)
 
     products: List["Product"] = Relationship(back_populates="seller")
     transactions: List["Transaction"] = Relationship(back_populates="seller")
@@ -65,7 +69,7 @@ class Transaction(SQLModel, table=True):
     amount: float  # Чистая прибыль (за вычетом комиссии)
     commission_amount: float = Field(default=0.0)  # Сумма комиссии
 
-    date: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    date: datetime = Field(default_factory=get_tomsk_now)
     comment: Optional[str] = Field(default=None)
 
     # Привязка к продавцу теперь опциональна (для "ничейных" транзакций)
@@ -85,7 +89,7 @@ class Transaction(SQLModel, table=True):
 # --- НОВОЕ: ТАБЛИЦА ЛОГОВ (Шаг 2) ---
 class AuditLog(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: datetime = Field(default_factory=get_tomsk_now)
 
     # Кто инициировал: логин админа/продавца или "system" (при синхронизации)
     actor: str = Field(index=True)
@@ -117,8 +121,8 @@ class PayoutRequest(SQLModel, table=True):
         str] = None  # Ссылка на загруженный файл-доказательство
 
     created_at: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc))
+        default_factory=get_tomsk_now)
     updated_at: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc))
+        default_factory=get_tomsk_now)
 
     seller: Optional[User] = Relationship()
