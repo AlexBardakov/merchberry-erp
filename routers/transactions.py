@@ -1,17 +1,18 @@
 from datetime import datetime, timedelta, timezone
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
 from sqlmodel import Session, select, col
 from typing import List, Optional
 from pydantic import BaseModel
 
 from services.business_api import BusinessRuClient
 from database import get_session
-from models import Transaction, User, Product
+from models import Transaction, User, Product, PayoutRequest
 from auth import get_current_user, get_current_admin
 from schemas import TransactionCreateRequest, TransactionRead, \
     TransactionBulkReassignRequest, TransactionUpdateRequest, RentChargeRequest
 from utils import create_audit_log
 from routers.vk_bot import send_vk_message_sync
+from services.websocket import manager
 
 router = APIRouter(prefix="/api/transactions", tags=["Transactions"])
 
@@ -224,6 +225,7 @@ def get_transactions(
 @router.post("/", response_model=TransactionRead)
 def create_manual_transaction(
         req: TransactionCreateRequest,
+        background_tasks: BackgroundTasks, # ДОБАВЛЕНО для отправки вебсокетов
         admin_data: dict = Depends(get_current_admin),
         session: Session = Depends(get_session)
 ):
@@ -249,6 +251,21 @@ def create_manual_transaction(
         seller.balance += req.amount
 
     session.add(new_transaction)
+
+    # --- НОВОЕ: Автоматическое создание заявки на выплату (Задача 10) ---
+    if req.type == "payout":
+        payout_req = PayoutRequest(
+            seller_id=seller.id,
+            amount=abs(req.amount), # В транзакции сумма с минусом, здесь нужен плюс
+            comment=req.comment or "Создано автоматически из раздела Финансы",
+            status="approved",
+            admin_comment="Проведено администратором вручную через ручную операцию"
+        )
+        session.add(payout_req)
+        # Отправляем сигнал на фронтенд, чтобы меню обновилось у всех
+        background_tasks.add_task(manager.broadcast, {"event": "payout_status_changed"})
+    # --------------------------------------------------------------------
+
     session.add(seller)
     session.flush()  # Получаем ID транзакции до коммита
 

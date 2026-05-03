@@ -1,5 +1,6 @@
 // src/components/Layout.tsx
 import React, { useState, useEffect } from 'react';
+import { useWebSocket } from '../api/websocket';
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, Package, Wallet, Users, RefreshCw, ClipboardList,
@@ -14,14 +15,13 @@ export const Layout = () => {
   const userRole = localStorage.getItem('userRole');
   const username = localStorage.getItem('username') || 'Пользователь';
 
-  // ДОБАВЛЕНО: Состояние для индикатора ожидающих выплат
   const [pendingPayoutsCount, setPendingPayoutsCount] = useState(0);
+  const { subscribe } = useWebSocket(); // ПОДКЛЮЧАЕМ ВЕБСОКЕТЫ
 
-  // Загрузка уведомлений при входе
+  // Загрузка уведомлений и прослушивание изменений
   useEffect(() => {
     const fetchNotifications = async () => {
       try {
-        // Уведомления об ожидающих выплатах (Админ видит все, Автор - свои)
         if (userRole) {
           const payoutsEndpoint = userRole === 'admin' ? '/payouts/all' : '/payouts/me';
           const payoutsRes = await apiClient.get(payoutsEndpoint);
@@ -32,8 +32,19 @@ export const Layout = () => {
         console.error("Ошибка загрузки уведомлений:", error);
       }
     };
-    fetchNotifications();
-  }, [userRole]);
+
+    fetchNotifications(); // Первичная загрузка
+
+    // Подписываемся на события создания новой заявки или изменения статуса старой
+    const unsubCreated = subscribe('payout_created', fetchNotifications);
+    const unsubStatus = subscribe('payout_status_changed', fetchNotifications);
+
+    // Отписываемся при размонтировании
+    return () => {
+      unsubCreated();
+      unsubStatus();
+    };
+  }, [userRole, subscribe]);
 
   const handleLogout = () => {
     localStorage.clear();
