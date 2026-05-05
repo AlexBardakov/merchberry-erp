@@ -516,9 +516,6 @@ export const Inventory = () => {
             <button onClick={handleBulkArchive} className="px-3 py-1 bg-white text-red-600 border border-red-200 text-sm rounded hover:bg-red-50 flex items-center gap-1">
               <Archive size={14} /> Архивировать
             </button>
-            <button onClick={handleBulkArchive} className="px-3 py-1 bg-white text-red-600 border border-red-200 text-sm rounded hover:bg-red-50 flex items-center gap-1">
-              <Archive size={14} /> Архивировать
-            </button>
             {/* НОВАЯ КНОПКА СЛИЯНИЯ */}
             {selectedIds.length > 1 && (
               <button onClick={() => setIsMergeModalOpen(true)} className="px-3 py-1 bg-white text-indigo-600 border border-indigo-200 text-sm rounded hover:bg-indigo-50 flex items-center gap-1">

@@ -59,7 +59,8 @@ def get_widget_stats(
     total_value = sum(p.base_price * p.stock for p in active_products)
 
     # 3. Продажи за 30 дней и предыдущие 30 дней
-    tx_stmt = select(Transaction).where(Transaction.type == "sale")
+    tx_stmt = select(Transaction).where(
+        Transaction.type.in_(["sale", "return"]))
     if target_seller_id:
         tx_stmt = tx_stmt.where(Transaction.seller_id == target_seller_id)
 
@@ -132,43 +133,37 @@ def get_dashboard_summary(
 
     buckets = defaultdict(
         lambda: {"full": 0.0, "profit": 0.0, "comm": 0.0, "items": []})
+
+    # Словари для топов
     product_counts = defaultdict(int)
+    product_revenues = defaultdict(float)
 
     days_diff = (end_date - start_date).days
 
-    # --- Создаем словарь для быстрой подмены имен в Топ-5 (агрегация блоков) ---
+    # --- Создаем словарь для быстрой подмены имен в Топ-5 и цен ---
     all_products = session.exec(select(Product)).all()
     product_name_mapping = {}
+    product_prices = {}  # Словарь цен для подсчета выручки
 
     for p in all_products:
         if p.parent_id:
             parent = next((parent_prod for parent_prod in all_products if
                            parent_prod.id == p.parent_id), None)
-            product_name_mapping[p.name] = parent.name if parent else p.name
+            final_name = parent.name if parent else p.name
+            product_name_mapping[p.name] = final_name
+            product_prices[
+                final_name] = parent.base_price if parent else p.base_price
         else:
             product_name_mapping[p.name] = p.name
+            product_prices[p.name] = p.base_price
     # ---------------------------------------------------------------------------------
 
-    # ИНИЦИАЛИЗАЦИЯ АНТИТОПА:
-    # Загружаем все актуальные товары, чтобы те, что не продавались, тоже имели 0 продаж
-    prod_stmt = select(Product).where(Product.is_obsolete == False)
-    if target_seller_id:
-        prod_stmt = prod_stmt.where(Product.seller_id == target_seller_id)
-    active_products = session.exec(prod_stmt).all()
-
-    for p in active_products:
-        final_name = product_name_mapping.get(p.name, p.name)
-        if final_name not in product_counts:
-            product_counts[final_name] = 0
-
     for tx in transactions:
-        # Для денег множитель не нужен! Суммы возвратов в БД уже отрицательные.
-        # Они сами вычтутся из общего баланса дня.
         total_full += tx.full_amount
         total_profit += tx.amount
         total_comm += tx.commission_amount
 
-        # Группировка
+        # Группировка для графиков
         if days_diff <= 14:
             weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
             bucket_label = f"{tx.date.strftime('%d.%m')} ({weekdays[tx.date.weekday()]})"
@@ -199,13 +194,18 @@ def get_dashboard_summary(
                     final_name = product_name_mapping.get(clean_name,
                                                           clean_name)
 
-                    # Количество в строке ("1 шт.") всегда положительное, поэтому вычитаем вручную
                     qty = int(count_str)
+                    price = product_prices.get(final_name,
+                                               0.0)  # Берем базовую цену
+
                     if tx.type == "return":
                         product_counts[final_name] -= qty
+                        product_revenues[final_name] -= (price * qty)
                     else:
                         product_counts[final_name] += qty
+                        product_revenues[final_name] += (price * qty)
 
+    # Формирование данных для графика
     chart_data = []
     if days_diff <= 14:
         for i in range(days_diff + 1):
@@ -232,21 +232,22 @@ def get_dashboard_summary(
                 commission=b_data["comm"], products_info=b_data["items"]
             ))
 
-    # ТОП-5 (Берем только те, где было продано хотя бы 1 раз)
+    # ТОП-5 по количеству
     valid_top = {k: v for k, v in product_counts.items() if v > 0}
     sorted_top = sorted(valid_top.items(), key=lambda x: x[1], reverse=True)[
                  :5]
     top_products = [
-        TopProductRead(rank=idx + 1, name=name, quantity=qty)
+        TopProductRead(rank=idx + 1, name=name, value=float(qty))
         for idx, (name, qty) in enumerate(sorted_top)
     ]
 
-    # АНТИТОП-5 (Берем наихудшие продажи, начиная с 0. Исключаем ушедшие в минус из-за возвратов без продаж)
-    valid_bottom = {k: v for k, v in product_counts.items() if v >= 0}
-    sorted_bottom = sorted(valid_bottom.items(), key=lambda x: x[1])[:5]
-    bottom_products = [
-        TopProductRead(rank=idx + 1, name=name, quantity=qty)
-        for idx, (name, qty) in enumerate(sorted_bottom)
+    # ТОП-5 по выручке (Вместо Антитопа)
+    valid_revenue = {k: v for k, v in product_revenues.items() if v > 0}
+    sorted_revenue = sorted(valid_revenue.items(), key=lambda x: x[1],
+                            reverse=True)[:5]
+    top_revenue_products = [
+        TopProductRead(rank=idx + 1, name=name, value=round(val, 2))
+        for idx, (name, val) in enumerate(sorted_revenue)
     ]
 
     return DashboardSummary(
@@ -255,7 +256,7 @@ def get_dashboard_summary(
         total_commission=total_comm,
         chart_data=chart_data,
         top_products=top_products,
-        bottom_products=bottom_products
+        top_revenue_products=top_revenue_products
     )
 
 
