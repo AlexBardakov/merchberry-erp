@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { User, Bell, Package, MessageCircle, ExternalLink, Unlink, CheckCircle, Shield, Phone, MapPin, CreditCard, Percent, DollarSign, AlertTriangle } from 'lucide-react';
+import { User, Bell, Package, MessageCircle, ExternalLink, Unlink, CheckCircle, Shield, Phone, MapPin, CreditCard, Percent, DollarSign, AlertTriangle, Camera, Wallet } from 'lucide-react';
 import apiClient from '../api/axios';
 import { useNavigate } from 'react-router-dom';
 
@@ -8,6 +8,35 @@ export const Profile = () => {
   const [user, setUser] = useState<any>(null);
   const [vkData, setVkData] = useState({ vk_link: '', is_bound: false, token: '' });
   const [isLoading, setIsLoading] = useState(true);
+
+  const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
+
+  const handleAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Проверка размера на стороне клиента (2 МБ)
+    if (file.size > 2 * 1024 * 1024) {
+      alert("Размер файла не должен превышать 2Мб");
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      setIsUploadingAvatar(true);
+      const res = await apiClient.post('/users/me/avatar', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+      setUser({ ...user, avatar_url: res.data.avatar_url });
+    } catch (error: any) {
+      console.error("Ошибка загрузки аватара:", error);
+      alert(error.response?.data?.detail || "Ошибка при загрузке изображения");
+    } finally {
+      setIsUploadingAvatar(false);
+    }
+  };
 
   const fetchProfileData = async () => {
     try {
@@ -87,9 +116,35 @@ export const Profile = () => {
         {/* КАРТОЧКА ПРОФИЛЯ */}
         <div className="lg:col-span-1 space-y-6">
           <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 text-center">
-            <div className="w-24 h-24 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center text-3xl font-bold mx-auto mb-4">
-              {user.username.charAt(0).toUpperCase()}
+
+            {/* ИНТЕРАКТИВНЫЙ БЛОК АВАТАРА */}
+            <div className="relative group cursor-pointer mb-4 flex items-center justify-center mx-auto w-24 h-24">
+              {user.avatar_url ? (
+                <img src={user.avatar_url} alt="Avatar" className="w-24 h-24 rounded-full object-cover shadow-sm border border-gray-200" />
+              ) : (
+                <div className="w-24 h-24 bg-indigo-100 rounded-full flex items-center justify-center text-indigo-600 text-3xl font-bold shadow-sm">
+                  {user.username.charAt(0).toUpperCase()}
+                </div>
+              )}
+
+              {/* Полупрозрачный слой при наведении с иконкой загрузки */}
+              <label className={`absolute inset-0 bg-black/50 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer ${isUploadingAvatar ? 'opacity-100' : ''}`}>
+                {isUploadingAvatar ? (
+                    <div className="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                ) : (
+                    <Camera size={24} className="text-white" />
+                )}
+                <input
+                  type="file"
+                  className="hidden"
+                  accept="image/jpeg, image/png, image/webp"
+                  onChange={handleAvatarUpload}
+                  disabled={isUploadingAvatar}
+                />
+              </label>
             </div>
+            {/* КОНЕЦ БЛОКА АВАТАРА */}
+
             <h2 className="text-xl font-bold text-gray-900">{user.username}</h2>
             <div className="inline-flex items-center gap-1 px-3 py-1 bg-gray-100 text-gray-600 rounded-full text-xs font-bold mt-2">
               <Shield size={12} />
@@ -98,7 +153,8 @@ export const Profile = () => {
 
             <div className="mt-8 space-y-3 text-left">
               <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-xl border border-gray-100">
-                <div className="p-2 bg-white rounded-lg shadow-sm text-indigo-600"><DollarSign size={18}/></div>
+                {/* ЗАМЕНИЛИ DollarSign НА Wallet */}
+                <div className="p-2 bg-white rounded-lg shadow-sm text-indigo-600"><Wallet size={18}/></div>
                 <div>
                   <div className="text-[10px] text-gray-400 uppercase font-bold tracking-wider">Баланс</div>
                   <div className={`text-lg font-bold ${user.balance >= 0 ? 'text-green-600' : 'text-red-600'}`}>

@@ -3,9 +3,12 @@ import csv
 import io
 import string
 import secrets
+import uuid
+import aiofiles
+
 
 from dotenv import load_dotenv
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, UploadFile, File
 from sqlmodel import Session, select, or_, col, func
 from typing import List, Optional
 from datetime import date, timedelta, datetime, time, timezone
@@ -24,6 +27,9 @@ router = APIRouter(prefix="/api/users", tags=["Users"])
 
 VK_GROUP_URL = os.getenv("VK_GROUP_URL")
 VK_GROUP_ID = os.getenv("VK_GROUP_ID")
+AVATAR_DIR = "uploads/avatars"
+os.makedirs(AVATAR_DIR, exist_ok=True)
+
 @router.post("/", response_model=User)
 def create_user(
         user_in: UserCreate,
@@ -393,3 +399,41 @@ def bulk_password_reset(
         headers={
             "Content-Disposition": "attachment; filename=passwords_reset.csv"}
     )
+
+@router.post("/me/avatar")
+async def upload_avatar(
+        file: UploadFile = File(...),
+        current_user: dict = Depends(get_current_user),
+        session: Session = Depends(get_session)
+):
+    # 1. Проверяем размер (2 МБ = 2 * 1024 * 1024 байт)
+    contents = await file.read()
+    if len(contents) > 2 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Размер файла не должен превышать 2Мб")
+
+    user = session.exec(select(User).where(User.username == current_user.get("username"))).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+
+    # 2. Удаляем старый файл, если он есть (чтобы не занимать место)
+    if user.avatar_url:
+        old_filename = user.avatar_url.split("/")[-1]
+        old_filepath = os.path.join(AVATAR_DIR, old_filename)
+        if os.path.exists(old_filepath):
+            os.remove(old_filepath)
+
+    # 3. Сохраняем новый файл
+    ext = file.filename.split('.')[-1] if '.' in file.filename else 'png'
+    new_filename = f"avatar_{user.id}_{uuid.uuid4().hex[:8]}.{ext}"
+    new_filepath = os.path.join(AVATAR_DIR, new_filename)
+
+    async with aiofiles.open(new_filepath, 'wb') as out_file:
+        await out_file.write(contents)
+
+    # 4. Обновляем БД
+    user.avatar_url = f"/api/uploads/avatars/{new_filename}"
+    session.add(user)
+    session.commit()
+    session.refresh(user)
+
+    return {"status": "success", "avatar_url": user.avatar_url}

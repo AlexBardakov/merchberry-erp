@@ -17,6 +17,7 @@ class User(SQLModel, table=True):
 
     full_name: Optional[str] = Field(default=None)
     phone: Optional[str] = Field(default=None)
+    avatar_url: Optional[str] = Field(default=None)
     payment_details: Optional[str] = Field(default=None)
 
     profile_last_modified: datetime = Field(default_factory=get_tomsk_now)

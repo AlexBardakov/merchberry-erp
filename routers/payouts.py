@@ -29,11 +29,14 @@ async def create_payout_request(
         current_user: dict = Depends(get_current_user),
         session: Session = Depends(get_session)
 ):
+    # 1. Получаем пользователя с блокировкой для защиты баланса
     user = session.exec(select(User).where(User.username == current_user.get(
         "username")).with_for_update()).first()
+
     if not user:
         raise HTTPException(status_code=404, detail="Пользователь не найден")
 
+    # 2. Валидация суммы
     if req.amount <= 0:
         raise HTTPException(status_code=400,
                             detail="Сумма должна быть больше нуля")
@@ -42,7 +45,7 @@ async def create_payout_request(
         raise HTTPException(status_code=400,
                             detail=f"Сумма превышает текущий баланс ({user.balance} ₽)")
 
-    # Проверка: запрещаем создавать новый запрос, если старый еще висит
+    # 3. Проверка на наличие уже висящей заявки
     existing_pending = session.exec(
         select(PayoutRequest).where(PayoutRequest.seller_id == user.id,
                                     PayoutRequest.status == "pending")
@@ -51,6 +54,7 @@ async def create_payout_request(
         raise HTTPException(status_code=400,
                             detail="У вас уже есть активный запрос в ожидании.")
 
+    # 4. Создание записи в БД
     payout = PayoutRequest(
         seller_id=user.id,
         amount=req.amount,
@@ -61,26 +65,46 @@ async def create_payout_request(
     session.commit()
     session.refresh(payout)
 
-    # Уведомление в беседу администраторов (Задача 4)
+    # 5. Формирование расширенного уведомления для администраторов
+    # Важно: фраза "заявка на выплату #ID" критически необходима для работы бота! [cite: 7, 21]
+    msg = (
+        f"🔔 НОВЫЙ ЗАПРОС НА ВЫПЛАТУ #{payout.id}\n\n"
+        f"👤 Автор: {user.username}\n"
+        f"📝 ФИО: {user.full_name or 'Не указано'}\n"
+        f"💳 Реквизиты: {user.payment_details or 'Не указаны'}\n"
+        f"💰 Текущий баланс: {user.balance} ₽\n"
+        f"📤 К выводу: {req.amount} ₽\n"
+    )
+
+    if req.comment:
+        msg += f"💬 Комментарий: {req.comment}\n"
+
+    msg += (
+        f"\n📌 Чтобы подтвердить, ОТВЕТЬТЕ на это сообщение и ПРИКРЕПИТЕ ФАЙЛ (чек/скриншот).\n"
+        f"Любой другой ответ без файла будет отклонен ботом. "
+    )
+
+    # 6. Отправка уведомления
+    # Сначала пробуем отправить в общую админ-беседу, если она указана в .env
     admin_chat_id = os.getenv("VK_ADMIN_CHAT_ID")
     if admin_chat_id:
-        msg = (
-            f"🔔 НОВЫЙ ЗАПРОС НА ВЫПЛАТУ\n"
-            f"👤 Автор: {user.username}\n"
-            f"📝 ФИО: {user.full_name or 'Не указано'}\n"
-            f"💳 Реквизиты: {user.payment_details or 'Не указаны'}\n"
-            f"💰 Текущий баланс: {user.balance} ₽\n"
-            f"📤 К выводу: {req.amount} ₽\n\n"
-        )
-        # Визуальное разделение комментариев
-        if req.comment:
-            msg += (
-                f"--- Комментарий от автора к запросу ---\n"
-                f"{req.comment}"
-            )
         send_vk_message_sync(admin_chat_id, msg)
-    session.refresh(payout)
-    await manager.broadcast({"event": "payout_created", "seller_id": payout.seller_id})
+
+    # Дополнительно дублируем личным сообщением всем администраторам с привязанным VK
+    try:
+        admins = session.exec(
+            select(User).where(User.role == "admin", User.vk_id != None)).all()
+        for admin in admins:
+            # Если ID беседы совпадает с ID админа, не дублируем
+            if str(admin.vk_id) != str(admin_chat_id):
+                send_vk_message_sync(admin.vk_id, msg)
+    except Exception as e:
+        print(f"Ошибка рассылки админам: {e}")
+
+    # 7. Обновление фронтенда через WebSocket
+    await manager.broadcast(
+        {"event": "payout_status_changed", "payout_id": payout.id})
+
     return payout
 
 
