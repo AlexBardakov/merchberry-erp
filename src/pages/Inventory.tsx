@@ -37,6 +37,7 @@ export const Inventory = () => {
   const [sortBy, setSortBy] = useState('name_asc');
   const [sellerFilter, setSellerFilter] = useState('all');
   const [includeObsolete, setIncludeObsolete] = useState(false);
+  const [maxStock, setMaxStock] = useState<string>('');
 
   // Состояния для импорта
   const [importFile, setImportFile] = useState<File | null>(null);
@@ -77,6 +78,8 @@ export const Inventory = () => {
   const userRole = localStorage.getItem('userRole');
   const isAdmin = userRole === 'admin';
 
+
+    
   // Загрузка данных
   useEffect(() => {
     setSelectedIds([]);
@@ -89,24 +92,37 @@ export const Inventory = () => {
     setPage(1); // Сбрасываем пагинацию при любой смене фильтра или сортировки
   };
 
-  const fetchProducts = async () => {
-    try {
-      setIsLoading(true);
-      const offset = (page - 1) * limit;
-      const res = await apiClient.get('/products/', {
-        params: {
-          limit, offset, sort_by: sortBy, include_obsolete: includeObsolete,
-          search: searchQuery, seller_filter: sellerFilter
-        }
-      });
-      setProducts(res.data);
-      setHasMore(res.data.length === limit);
-    } catch (error) {
-      console.error("Ошибка загрузки товаров:", error);
-    } finally {
-      setIsLoading(false);
+const fetchProducts = async () => {
+  try {
+    setIsLoading(true);
+    const offset = (page - 1) * limit;
+
+    // 1. Формируем базовые параметры
+    const params: any = {
+      limit,
+      offset,
+      sort_by: sortBy,
+      include_obsolete: includeObsolete,
+      search: searchQuery,
+      seller_filter: sellerFilter
+    };
+
+    // 2. Добавляем фильтр по количеству (max_stock),
+    if (maxStock !== '') {
+      params.max_stock = parseInt(maxStock, 10);
     }
-  };
+
+    // 3. Отправляем запрос с итоговыми параметрами
+    const res = await apiClient.get('/products/', { params });
+
+    setProducts(res.data);
+    setHasMore(res.data.length === limit);
+  } catch (error) {
+    console.error("Ошибка загрузки товаров:", error);
+  } finally {
+    setIsLoading(false);
+  }
+};
 
   const fetchSellers = async () => {
     try {
@@ -483,6 +499,18 @@ export const Inventory = () => {
             <option value="stock_desc">Много на складе</option>
             <option value="stock_asc">Мало на складе</option>
           </select>
+
+              <input
+                type="number"
+                min="0"
+                placeholder="<= N"
+                value={maxStock}
+                onChange={(e) => setMaxStock(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && fetchProducts()}
+                onBlur={fetchProducts}
+                className="px-3 py-2 border border-gray-300 rounded-lg text-sm w-24 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                title="Показать товары с остатком меньше или равным N"
+              />
 
           <label className="flex items-center gap-2 cursor-pointer border border-gray-300 px-3 py-2 rounded-lg hover:bg-gray-50">
             <input

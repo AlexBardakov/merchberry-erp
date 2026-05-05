@@ -25,11 +25,10 @@ class ProductMergeRequest(BaseModel):
 def get_products(
         seller_filter: Optional[str] = Query("all",
                                              description="all, unassigned, или ID продавца"),
-        # НОВЫЙ ФИЛЬТР
         search: Optional[str] = Query("",
                                       description="Поиск по артикулу или названию"),
-        # ПОИСК
         sort_by: Optional[str] = Query("name_asc"),
+        max_stock: Optional[int] = Query(None, description="Фильтр: остаток <= N"), # <-- НОВОЕ ПОЛЕ
         include_obsolete: bool = Query(False),
         limit: int = Query(50, ge=1, le=100),
         offset: int = Query(0, ge=0),
@@ -51,6 +50,13 @@ def get_products(
             )
         )
 
+    # --- НОВЫЙ БЛОК: Фильтр по остатку <= N ---
+    if max_stock is not None:
+        # Добавили Product.parent_id == None, чтобы не считывать внутренние позиции блоков
+        statement = statement.where(Product.stock <= max_stock,
+                                    Product.parent_id == None)
+    # ------------------------------------------
+
     # Обработка ролей и фильтра по продавцу
     if current_user.get("role") == "seller":
         user_in_db = session.exec(select(User).where(
@@ -70,9 +76,9 @@ def get_products(
         statement = statement.order_by(Product.base_price)
     elif sort_by == "price_desc":
         statement = statement.order_by(col(Product.base_price).desc())
-    elif sort_by == "stock_asc":  # НОВОЕ
+    elif sort_by == "stock_asc":
         statement = statement.order_by(Product.stock)
-    elif sort_by == "stock_desc":  # НОВОЕ
+    elif sort_by == "stock_desc":
         statement = statement.order_by(col(Product.stock).desc())
 
     return session.exec(statement.offset(offset).limit(limit)).all()

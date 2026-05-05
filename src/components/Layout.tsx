@@ -44,7 +44,8 @@ export const Layout = () => {
       unsubCreated();
       unsubStatus();
     };
-  }, [userRole, subscribe]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userRole]); // Убрали subscribe, чтобы остановить бесконечный цикл!
 
   const handleLogout = () => {
     localStorage.clear();
