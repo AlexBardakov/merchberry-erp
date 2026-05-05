@@ -157,6 +157,7 @@ class TopProductRead(BaseModel):
     rank: int
     name: str
     value: float
+    author: Optional[str] = None
 
 class ChartDataPoint(BaseModel):
     label: str

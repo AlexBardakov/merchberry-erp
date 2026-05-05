@@ -10,6 +10,7 @@ interface TopProduct {
   rank: number;
   name: string;
   value: number;
+  author?: string;
 }
 
 interface ChartDataPoint {
@@ -58,6 +59,7 @@ export const Dashboard = () => {
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isExporting, setIsExporting] = useState(false);
+  const [isExportingTops, setIsExportingTops] = useState(false);
 
   // --- СРАВНЕНИЕ ПРОДАЖ ---
   const [showComparison, setShowComparison] = useState(false);
@@ -198,7 +200,10 @@ export const Dashboard = () => {
         <ul className="space-y-2">
           {products.map((p) => (
             <li key={p.rank} className="flex justify-between items-center text-sm">
-              <span className="text-gray-800 truncate pr-4"><span className="text-gray-400 w-4 inline-block">{p.rank}.</span> {p.name}</span>
+              <span className="text-gray-800 truncate pr-4">
+                <span className="text-gray-400 w-4 inline-block">{p.rank}.</span>
+                {p.name} {p.author && <span className="text-gray-400 text-xs">({p.author})</span>}
+              </span>
               <span className="font-bold text-indigo-600 whitespace-nowrap">{p.value} шт.</span>
             </li>
           ))}
@@ -219,7 +224,8 @@ export const Dashboard = () => {
             {products.map((p) => (
               <li key={p.rank} className="flex justify-between items-center text-sm">
                 <span className="text-gray-800 truncate pr-4">
-                  <span className="text-indigo-400 w-4 inline-block">{p.rank}.</span> {p.name}
+                  <span className="text-gray-400 w-4 inline-block">{p.rank}.</span>
+                  {p.name} {p.author && <span className="text-gray-400 text-xs">({p.author})</span>}
                 </span>
                 <span className="font-bold text-indigo-600 whitespace-nowrap">
                   {p.value.toLocaleString('ru-RU')} ₽
@@ -232,6 +238,26 @@ export const Dashboard = () => {
         )}
       </div>
     );
+
+  const handleExportTops = async () => {
+      setIsExportingTops(true);
+      const sellerQuery = selectedSeller !== 'all' ? `&seller_id=${selectedSeller}` : '';
+      const url = `/analytics/export-tops?start_date=${startDate}&end_date=${endDate}${sellerQuery}`;
+      try {
+        const response = await apiClient.get(url, { responseType: 'blob' });
+        const blobUrl = window.URL.createObjectURL(new Blob([response.data]));
+        const link = document.createElement('a');
+        link.href = blobUrl;
+        link.setAttribute('download', `tops_${startDate}_${endDate}.csv`);
+        document.body.appendChild(link);
+        link.click();
+        link.parentNode?.removeChild(link);
+      } catch (error) {
+        console.error("Ошибка выгрузки топов:", error);
+      } finally {
+        setIsExportingTops(false);
+      }
+    };
 
   return (
     <div className="space-y-6">
@@ -332,13 +358,20 @@ export const Dashboard = () => {
 
             {/* КНОПКА ВЫГРУЗКИ */}
             <button
-              onClick={handleExport}
-              disabled={isExporting}
-              className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 transition-colors disabled:bg-indigo-400"
-            >
-              <Download size={16} />
-              {isExporting ? 'Загрузка...' : 'Выгрузить CSV'}
-            </button>
+                onClick={handleExport}
+                disabled={isExporting}
+                className="flex items-center gap-2 px-4 py-2 bg-gray-100 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-200 transition-colors"
+              >
+                <Download size={16} /> {isExporting ? '...' : 'CSV Продажи'}
+              </button>
+
+              <button
+                onClick={handleExportTops}
+                disabled={isExportingTops}
+                className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 transition-colors"
+              >
+                <Download size={16} /> {isExportingTops ? '...' : 'CSV Топы'}
+              </button>
           </div>
         </div>
 

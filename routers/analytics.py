@@ -142,20 +142,28 @@ def get_dashboard_summary(
 
     # --- Создаем словарь для быстрой подмены имен в Топ-5 и цен ---
     all_products = session.exec(select(Product)).all()
+    users = session.exec(select(User)).all()
+    user_map = {u.id: u.username for u in users}
+
     product_name_mapping = {}
     product_prices = {}  # Словарь цен для подсчета выручки
+    product_authors = {}
 
     for p in all_products:
+        # Определяем "финальное" имя (родительское)
+        final_name = p.name
         if p.parent_id:
-            parent = next((parent_prod for parent_prod in all_products if
-                           parent_prod.id == p.parent_id), None)
-            final_name = parent.name if parent else p.name
-            product_name_mapping[p.name] = final_name
-            product_prices[
-                final_name] = parent.base_price if parent else p.base_price
-        else:
-            product_name_mapping[p.name] = p.name
-            product_prices[p.name] = p.base_price
+            parent = next(
+                (prod for prod in all_products if prod.id == p.parent_id),
+                None)
+            if parent: final_name = parent.name
+
+        product_name_mapping[p.name] = final_name
+        product_prices[final_name] = p.base_price
+
+        # Запоминаем автора товара
+        if final_name not in product_authors:
+            product_authors[final_name] = user_map.get(p.seller_id, "Ничейный")
     # ---------------------------------------------------------------------------------
 
     for tx in transactions:
@@ -232,23 +240,34 @@ def get_dashboard_summary(
                 commission=b_data["comm"], products_info=b_data["items"]
             ))
 
-    # ТОП-5 по количеству
-    valid_top = {k: v for k, v in product_counts.items() if v > 0}
-    sorted_top = sorted(valid_top.items(), key=lambda x: x[1], reverse=True)[
-                 :5]
-    top_products = [
-        TopProductRead(rank=idx + 1, name=name, value=float(qty))
-        for idx, (name, qty) in enumerate(sorted_top)
-    ]
+        # Функция-помощник для формирования списков с учетом авторов
+    def format_top_list(sorted_items):
+        res = []
+        for idx, (name, val) in enumerate(sorted_items):
+            author_name = None
+                # Если админ смотрит общую статистику, передаем имя автора
+            if is_admin and not target_seller_id:
+                author_name = product_authors.get(name)
 
-    # ТОП-5 по выручке (Вместо Антитопа)
+            res.append(TopProductRead(
+                rank=idx + 1,
+                name=name,
+                value=float(val),
+                author=author_name
+            ))
+        return res
+
+        # Формируем итоговые списки Топ-5
+    valid_top = {k: v for k, v in product_counts.items() if v > 0}
+    top_products = format_top_list(
+        sorted(valid_top.items(), key=lambda x: x[1], reverse=True)[:5]
+    )
+
     valid_revenue = {k: v for k, v in product_revenues.items() if v > 0}
-    sorted_revenue = sorted(valid_revenue.items(), key=lambda x: x[1],
-                            reverse=True)[:5]
-    top_revenue_products = [
-        TopProductRead(rank=idx + 1, name=name, value=round(val, 2))
-        for idx, (name, val) in enumerate(sorted_revenue)
-    ]
+    top_revenue_products = format_top_list(
+        sorted(valid_revenue.items(), key=lambda x: x[1], reverse=True)[:5]
+    )
+        # --- КОНЕЦ ВСТАВКИ ---
 
     return DashboardSummary(
         total_full_amount=total_full,
@@ -352,4 +371,94 @@ def export_analytics(
         media_type="text/csv",
         headers={
             "Content-Disposition": f"attachment; filename=analytics_{start_date}_to_{end_date}.csv"}
+    )
+
+
+@router.get("/export-tops")
+def export_analytics_tops(
+        start_date: date = Query(...),
+        end_date: date = Query(...),
+        seller_id: Optional[int] = Query(None),
+        current_user: dict = Depends(get_current_user),
+        session: Session = Depends(get_session)
+):
+    # Аналогичная логика сбора данных, но для ВСЕХ товаров
+    is_admin = current_user.get("role") == "admin"
+    target_seller_id = seller_id if is_admin and seller_id else (
+        None if is_admin else session.exec(select(User).where(
+            User.username == current_user["username"])).first().id)
+
+    # 1. Считаем продажи из транзакций
+    start_dt = datetime.combine(start_date, datetime.min.time()).replace(
+        tzinfo=timezone.utc)
+    end_dt = datetime.combine(end_date, datetime.max.time()).replace(
+        tzinfo=timezone.utc)
+
+    tx_stmt = select(Transaction).where(
+        Transaction.type.in_(["sale", "return"]), Transaction.date >= start_dt,
+        Transaction.date <= end_dt)
+    if target_seller_id: tx_stmt = tx_stmt.where(
+        Transaction.seller_id == target_seller_id)
+    transactions = session.exec(tx_stmt).all()
+
+    # 2. Собираем все активные товары склада
+    prod_stmt = select(Product).where(Product.is_obsolete == False)
+    if target_seller_id: prod_stmt = prod_stmt.where(
+        Product.seller_id == target_seller_id)
+    active_products = session.exec(prod_stmt).all()
+
+    # Маппинг и агрегация
+    user_map = {u.id: u.username for u in session.exec(select(User)).all()}
+    stats = defaultdict(lambda: {"qty": 0, "rev": 0, "author": "", "price": 0})
+
+    for p in active_products:
+        name = p.name
+        if p.parent_id:
+            parent = next(
+                (prod for prod in active_products if prod.id == p.parent_id),
+                None)
+            if parent: name = parent.name
+        stats[name]["author"] = user_map.get(p.seller_id, "Ничейный")
+        stats[name]["price"] = p.base_price
+
+    # Считаем реальные продажи
+    for tx in transactions:
+        matches = re.findall(r"(.+?)\s\((\d+)\sшт\.\)",
+                             tx.product_identifier or "")
+        for name, count_str in matches:
+            clean_name = name.strip().lstrip(',').strip()
+            # Проверяем, есть ли товар в наших "активных" для маппинга
+            final_name = clean_name
+            # (Упрощенный поиск родителя для CSV)
+            if clean_name in stats:
+                qty = int(count_str) * (-1 if tx.type == "return" else 1)
+                stats[clean_name]["qty"] += qty
+                stats[clean_name]["rev"] += (stats[clean_name]["price"] * qty)
+
+    # Формируем CSV
+    output = io.StringIO()
+    writer = csv.writer(output, delimiter=';')
+
+    # Таблица 1: Топ по количеству
+    writer.writerow(["ТОП ПРОДАЖ ПО КОЛИЧЕСТВУ (за период)"])
+    writer.writerow(["Наименование", "Автор", "Продано (шт)"])
+    sorted_qty = sorted(stats.items(), key=lambda x: (-x[1]["qty"], x[0]))
+    for name, data in sorted_qty:
+        writer.writerow([name, data["author"], data["qty"]])
+
+    writer.writerow([])  # Разделитель
+
+    # Таблица 2: Топ по сумме
+    writer.writerow(["ТОП ПРОДАЖ ПО СУММЕ (за период)"])
+    writer.writerow(["Наименование", "Автор", "Сумма выручки (руб)"])
+    sorted_rev = sorted(stats.items(), key=lambda x: -x[1]["rev"])
+    for name, data in sorted_rev:
+        writer.writerow([name, data["author"], data["rev"]])
+
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue().encode("utf-8-sig")]),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f"attachment; filename=tops_{start_date}_{end_date}.csv"}
     )
