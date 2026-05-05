@@ -397,6 +397,8 @@ def run_b2b_sync(session: Session, force_full: bool = False):
 
             # === ОБРАБОТКА ТОВАРОВ ===
             grouped_data = {}
+            sellers_cache = {}  # Кэш авторов
+            low_stock_alerts = {}  # Агрегатор дефицита {seller_id: {product_name: stock}}
 
             for item in op.get("goods", []):
                 b2b_good_id = str(item.get("good_id", "")).strip()
@@ -423,7 +425,30 @@ def run_b2b_sync(session: Session, force_full: bool = False):
                     if is_return:
                         target_stock_product.stock += count
                     else:
-                        target_stock_product.stock = max(0, target_stock_product.stock - count)
+                        target_stock_product.stock = max(0,
+                                                         target_stock_product.stock - count)
+
+                        # --- НОВОЕ: Проверка на дефицит (Только при продаже) ---
+                        s_id = target_stock_product.seller_id
+                        if s_id:
+                            if s_id not in sellers_cache:
+                                sellers_cache[s_id] = session.get(User, s_id)
+                            seller = sellers_cache[s_id]
+
+                            # Проверяем, включены ли уведомления о дефиците у этого автора
+                            if seller and getattr(seller, 'vk_id',
+                                                  None) and getattr(seller,
+                                                                    'vk_notify_low_stock',
+                                                                    False):
+                                threshold = getattr(seller,
+                                                    'low_stock_threshold', 3)
+                                if target_stock_product.stock <= threshold:
+                                    if s_id not in low_stock_alerts:
+                                        low_stock_alerts[s_id] = {}
+                                    # Записываем товар (перезапишет дубли в рамках одной синхронизации)
+                                    low_stock_alerts[s_id][
+                                        target_stock_product.name] = target_stock_product.stock
+                        # --------------------------------------------------------
 
                     session.add(target_stock_product)
 
@@ -505,6 +530,16 @@ def run_b2b_sync(session: Session, force_full: bool = False):
 
         # Сохраняем все изменения разом ПОСЛЕ того, как обработали все чеки
         session.commit()
+
+        for s_id, items_dict in low_stock_alerts.items():
+            if not items_dict: continue
+            seller = sellers_cache[s_id]
+            msg_lines = ["⚠️ Внимание! Дефицит товаров на складе:\n"]
+            for p_name, p_stock in items_dict.items():
+                msg_lines.append(f"• {p_name} — осталось: {p_stock} шт.")
+
+            # Отправляем одно сообщение со списком всех товаров!
+            send_vk_message_sync(seller.vk_id, "\n".join(msg_lines))
 
         if processed_count == 0 and skipped_count == 0:
             return {

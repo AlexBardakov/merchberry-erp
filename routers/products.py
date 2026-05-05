@@ -305,6 +305,9 @@ def confirm_products_import(  # <--- Убрали async!
     stats = {"added": 0, "updated": 0, "authors_created": 0}
     admin_username = admin_data.get("username", "admin")
 
+    sellers_cache = {}  # <-- НОВОЕ
+    low_stock_alerts = {}  # <-- НОВОЕ
+
     # 1. Создаем новых авторов, если админ выбрал их на фронтенде
     if request.authors_to_create:
         for author_name in request.authors_to_create:
@@ -348,6 +351,21 @@ def confirm_products_import(  # <--- Убрали async!
             if db_product.stock != diff.new_stock:
                 changes["stock"] = {"old": db_product.stock, "new": diff.new_stock}
                 db_product.stock = diff.new_stock
+
+                s_id = db_product.seller_id
+                if s_id:
+                    if s_id not in sellers_cache:
+                        sellers_cache[s_id] = session.get(User, s_id)
+                    seller = sellers_cache[s_id]
+                    if seller and getattr(seller, 'vk_id', None) and getattr(
+                            seller, 'vk_notify_low_stock', False):
+                        threshold = getattr(seller, 'low_stock_threshold', 3)
+                        # Если новый остаток после импорта меньше порога
+                        if db_product.stock <= threshold:
+                            if s_id not in low_stock_alerts:
+                                low_stock_alerts[s_id] = {}
+                            low_stock_alerts[s_id][
+                                db_product.name] = db_product.stock
 
             if db_product.name != diff.name:
                 changes["name"] = {"old": db_product.name, "new": diff.name}
@@ -416,8 +434,22 @@ def confirm_products_import(  # <--- Убрали async!
     # Сохраняем всё разом в конце (оптимизация скорости)
     session.commit()
 
-    # Передаем отправку уведомления в фон
-    background_tasks.add_task(manager.broadcast, {"event": "inventory_updated"})
+    for s_id, items_dict in low_stock_alerts.items():
+        if not items_dict: continue
+        seller = sellers_cache[s_id]
+        msg_lines = [
+            "⚠️ Внимание! Дефицит товаров (по итогам инвентаризации):\n"]
+        for p_name, p_stock in items_dict.items():
+            msg_lines.append(f"• {p_name} — осталось: {p_stock} шт.")
+
+        # Передаем отправку в фоновые задачи, чтобы не тормозить ответ API
+        background_tasks.add_task(send_vk_message_sync, seller.vk_id,
+                                  "\n".join(msg_lines))
+        # -------------------------------------------------------------
+
+        # Передаем отправку уведомления в фон
+    background_tasks.add_task(manager.broadcast,
+                              {"event": "inventory_updated"})
 
     return {"message": "Импорт успешно завершен", "stats": stats}
 
