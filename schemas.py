@@ -130,6 +130,7 @@ class UserVKSettingsUpdate(BaseModel):
     vk_id: Optional[str] = None
     vk_notify_inventory: Optional[bool] = None
     vk_notify_sales: Optional[bool] = None
+    vk_notify_low_stock: Optional[bool] = None
 
 
 # Обновим UserRead, чтобы фронтенд получал данные о ВК

@@ -53,14 +53,22 @@ def scheduled_inventory_notify_job():
     print("📦 Запуск ежедневной рассылки об изменениях склада...")
     with Session(engine) as session:
         try:
+            # Выбираем тех, у кого привязан ВК и включена галочка "Сводка по складу"
             users_to_notify = session.exec(
-                select(User).where(User.vk_id != None, User.vk_notify_inventory == True)
+                select(User).where(User.vk_id != None,
+                                   User.vk_notify_inventory == True)
             ).all()
 
             if not users_to_notify:
                 return
 
             yesterday = datetime.now(TOMSK_TZ) - timedelta(days=1)
+
+            # Разрешенные действия. МЫ ИСКЛЮЧАЕМ ПРОДАЖИ (sync_update, sale и т.д.)
+            valid_actions = [
+                "import_update", "import_create", "product_update",
+                "merge_products", "unmerge_product", "manual_edit"
+            ]
 
             for user in users_to_notify:
                 # Получаем ID всех товаров пользователя
@@ -71,12 +79,14 @@ def scheduled_inventory_notify_job():
                 if not product_map:
                     continue
 
-                # Ищем логи для этих товаров за последние 24 часа
+                # Ищем логи для этих товаров за последние 24 часа только по разрешенным действиям
                 logs = session.exec(
                     select(AuditLog).where(
                         AuditLog.entity_name.in_(["Product", "product"]),
                         AuditLog.entity_id.in_(list(product_map.keys())),
-                        AuditLog.timestamp >= yesterday
+                        AuditLog.timestamp >= yesterday,
+                        AuditLog.action.in_(valid_actions)
+                        # <-- ФИЛЬТР ПРОТИВ ПРОДАЖ
                     ).order_by(AuditLog.timestamp)
                 ).all()
 
@@ -103,9 +113,11 @@ def scheduled_inventory_notify_job():
                                                          dict):
                         old_s = changes["stock"].get("old", 0)
                         new_s = changes["stock"].get("new", 0)
-                        msg_lines.append(
-                            f"• {p_name}: {old_s} шт. ➔ {new_s} шт.")
-                        changes_count += 1
+                        # Защита от спама, если остаток по факту не изменился
+                        if old_s != new_s:
+                            msg_lines.append(
+                                f"• {p_name}: {old_s} шт. ➔ {new_s} шт.")
+                            changes_count += 1
 
                     elif "initial_stock" in changes:
                         msg_lines.append(
@@ -119,7 +131,6 @@ def scheduled_inventory_notify_job():
         except Exception as e:
             print(f"❌ Ошибка рассылки по складу: {e}")
 
-
 @app.on_event("startup")
 def on_startup():
     create_db_and_tables()
@@ -127,9 +138,8 @@ def on_startup():
     # Синхронизация с Бизнес.Ру (каждый час)
     scheduler.add_job(scheduled_sync_job, 'interval', hours=1)
 
-    # НОВОЕ: Рассылка по складу (каждый день в 20:00)
-    scheduler.add_job(scheduled_inventory_notify_job, 'cron', hour=20,
-                      minute=0)
+    # Ежедневная рассылка по складу в 21:00 (Изменено с 20:00)
+    scheduler.add_job(scheduled_inventory_notify_job, 'cron', hour=21, minute=0)
 
     scheduler.start()
     print("⏱️ Планировщик фоновых задач запущен!")

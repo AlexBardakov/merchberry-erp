@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { User, Bell, Package, MessageCircle, ExternalLink, Unlink, CheckCircle, Shield, Phone, MapPin, CreditCard, Percent, DollarSign } from 'lucide-react';
+import { User, Bell, Package, MessageCircle, ExternalLink, Unlink, CheckCircle, Shield, Phone, MapPin, CreditCard, Percent, DollarSign, AlertTriangle } from 'lucide-react';
 import apiClient from '../api/axios';
 import { useNavigate } from 'react-router-dom';
 
@@ -38,6 +38,20 @@ export const Profile = () => {
       fetchProfileData();
     }
   };
+
+  const handleUpdateThreshold = async (newThreshold: number) => {
+      if (!user) return;
+      // Сразу обновляем локально для быстроты интерфейса
+      setUser({ ...user, low_stock_threshold: newThreshold });
+      try {
+        // Используем существующий эндпоинт /me/settings
+        await apiClient.patch('/users/me/settings', { low_stock_threshold: newThreshold });
+      } catch (e) {
+        console.error("Ошибка при сохранении порога:", e);
+        alert("Не удалось сохранить порог уведомлений");
+        fetchProfileData();
+      }
+    };
 
   const handleUnbindVk = async () => {
     if (!window.confirm("Вы уверены, что хотите отвязать аккаунт ВКонтакте?")) return;
@@ -171,9 +185,43 @@ export const Profile = () => {
                       <div className="flex items-center gap-3"><Bell size={18} className="text-blue-600" /><div><div className="text-sm font-bold text-gray-900">Продажи и выплаты</div><div className="text-xs text-gray-500">Уведомления в ЛС о новых чеках</div></div></div>
                       <input type="checkbox" className="w-4 h-4 text-blue-600 rounded cursor-pointer" checked={user.vk_notify_sales} onChange={(e) => toggleVkSetting('vk_notify_sales', e.target.checked)} />
                     </label>
+
                     <label className="flex items-center justify-between cursor-pointer p-4 bg-gray-50 hover:bg-gray-100 rounded-xl border border-gray-200 transition-colors">
-                      <div className="flex items-center gap-3"><Package size={18} className="text-orange-500" /><div><div className="text-sm font-bold text-gray-900">Сводка по складу</div><div className="text-xs text-gray-500">Ежедневный отчет об остатках</div></div></div>
-                      <input type="checkbox" className="w-4 h-4 text-blue-600 rounded cursor-pointer" checked={user.vk_notify_inventory} onChange={(e) => toggleVkSetting('vk_notify_inventory', e.target.checked)} />
+                      <div className="flex items-center gap-3"><Package size={18} className="text-indigo-500" /><div><div className="text-sm font-bold text-gray-900">Изменения склада</div><div className="text-xs text-gray-500">Ежедневный отчет об изменениях в 21:00</div></div></div>
+                      <input type="checkbox" className="w-4 h-4 text-indigo-600 rounded cursor-pointer" checked={user.vk_notify_inventory} onChange={(e) => toggleVkSetting('vk_notify_inventory', e.target.checked)} />
+                    </label>
+
+                    {/* НОВЫЙ БЛОК УВЕДОМЛЕНИЙ О ДЕФИЦИТЕ */}
+                    <label className="flex items-center justify-between cursor-pointer p-4 bg-gray-50 hover:bg-gray-100 rounded-xl border border-gray-200 transition-colors">
+                      <div className="flex items-center gap-3">
+                        <AlertTriangle size={18} className="text-orange-500" />
+                        <div className="flex flex-col">
+                          <div className="text-sm font-bold text-gray-900">Дефицит товаров</div>
+                          <div className="flex items-center gap-1.5 text-xs text-gray-500">
+                            Уведомлять при остатке {"<="}
+                            <input
+                              type="number"
+                              min="0"
+                              className="w-12 px-1.5 py-0.5 border border-gray-300 rounded bg-white text-center font-bold text-indigo-600 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                              value={user.low_stock_threshold}
+                              onClick={(e) => e.preventDefault()} // Чтобы клик по инпуту не переключал галочку
+                              onChange={(e) => {
+                                const val = parseInt(e.target.value) || 0;
+                                setUser({ ...user, low_stock_threshold: val });
+                              }}
+                              onBlur={(e) => handleUpdateThreshold(parseInt(e.target.value) || 0)}
+                              onKeyDown={(e) => e.key === 'Enter' && handleUpdateThreshold(parseInt((e.target as HTMLInputElement).value) || 0)}
+                            />
+                            шт.
+                          </div>
+                        </div>
+                      </div>
+                      <input
+                        type="checkbox"
+                        className="w-4 h-4 text-orange-600 rounded cursor-pointer"
+                        checked={user.vk_notify_low_stock || false}
+                        onChange={(e) => toggleVkSetting('vk_notify_low_stock', e.target.checked)}
+                      />
                     </label>
                 </div>
               </div>

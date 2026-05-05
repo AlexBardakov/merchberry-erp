@@ -36,6 +36,7 @@ class User(SQLModel, table=True):
     vk_link_token: Optional[str] = Field(default=None, unique=True, index=True)
     vk_notify_inventory: bool = Field(default=False)
     vk_notify_sales: bool = Field(default=False)
+    vk_notify_low_stock: bool = Field(default=False)
 
     notes: Optional[str] = None
     is_active: bool = Field(default=True) # Используется как статус архивации (False = в архиве)

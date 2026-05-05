@@ -259,7 +259,7 @@ def delete_user_account(
 @router.patch("/{user_id}/vk")
 def update_vk_settings(
         user_id: int,
-        req: UserVKSettingsUpdate,
+        req: UserVKSettingsUpdate, # Убедись, что схема обновлена!
         current_user: dict = Depends(get_current_user),
         session: Session = Depends(get_session)
 ):
@@ -267,7 +267,7 @@ def update_vk_settings(
     if not user:
         raise HTTPException(status_code=404, detail="Пользователь не найден")
 
-    # Проверка прав: менять настройки ВК может либо админ, либо сам владелец профиля
+    # Проверка прав
     if current_user.get("role") != "admin":
         current_db_user = session.exec(select(User).where(User.username == current_user.get("username"))).first()
         if not current_db_user or current_db_user.id != user_id:
@@ -279,6 +279,9 @@ def update_vk_settings(
         user.vk_notify_inventory = req.vk_notify_inventory
     if req.vk_notify_sales is not None:
         user.vk_notify_sales = req.vk_notify_sales
+    # --- НОВАЯ СТРОКА ---
+    if hasattr(req, 'vk_notify_low_stock') and req.vk_notify_low_stock is not None:
+        user.vk_notify_low_stock = req.vk_notify_low_stock
 
     session.add(user)
     session.commit()
